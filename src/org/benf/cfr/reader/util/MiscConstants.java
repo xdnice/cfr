@@ -26,8 +26,10 @@ public interface MiscConstants {
 
     String INIT_METHOD = "<init>";
     String STATIC_INIT_METHOD = "<clinit>";
+    String DOT_THIS = ".this";
     String THIS = "this";
     String CLASS = "class";
+    String NEW = "new";
     String UNBOUND_GENERIC = "?";
     char INNER_CLASS_SEP_CHAR = '$';
     String INNER_CLASS_SEP_STR = "$";
@@ -40,5 +42,6 @@ public interface MiscConstants {
     String MANIFEST_PATH = "META-INF/MANIFEST.MF";
     String MULTI_RELEASE_KEY = "Multi-Release";
     String MULTI_RELEASE_PREFIX = "META-INF/versions/";
+    String WAR_PREFIX = "WEB-INF/classes/";
     Pattern MULTI_RELEASE_PATH_PATTERN = Pattern.compile("^" + MULTI_RELEASE_PREFIX + "(\\d+)/(.*)$");
 }

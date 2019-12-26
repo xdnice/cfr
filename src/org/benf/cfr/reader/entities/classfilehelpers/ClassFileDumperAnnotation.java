@@ -26,7 +26,7 @@ public class ClassFileDumperAnnotation extends AbstractClassFileDumper {
 
         d.print("@interface ").dump(c.getThisClassConstpoolEntry().getTypeInstance());
         getFormalParametersText(signature, d);
-        d.print("\n");
+        d.newln();
 
         d.removePendingCarriageReturn().print(" ");
     }
@@ -43,28 +43,18 @@ public class ClassFileDumperAnnotation extends AbstractClassFileDumper {
         boolean first = true;
         dumpAnnotations(classFile, d);
         dumpHeader(classFile, innerClass, d);
-        d.print("{\n");
+        d.separator("{").newln();
         d.indent(1);
         // Horrid, but an interface can have fields....
         List<ClassFileField> fields = classFile.getFields();
         for (ClassFileField field : fields) {
-            field.dump(d);
+            field.dump(d, classFile);
             first = false;
         }
-        List<Method> methods = classFile.getMethods();
-        if (!methods.isEmpty()) {
-            for (Method meth : methods) {
-                if (!first) {
-                    d.newln();
-                }
-                first = false;
-                // Java 8 supports 'defender' interfaces, i.e. method bodies on interfaces (eww).
-                meth.dump(d, false);
-            }
-        }
+        dumpMethods(classFile, d, first, false);
         classFile.dumpNamedInnerClasses(d);
         d.indent(-1);
-        d.print("}\n");
+        d.print("}").newln();
         return d;
     }
 

@@ -3,6 +3,7 @@ package org.benf.cfr.reader.state;
 import org.benf.cfr.reader.apiunreleased.ClassFileSource2;
 import org.benf.cfr.reader.apiunreleased.JarContent;
 import org.benf.cfr.reader.bytecode.analysis.parse.utils.Pair;
+import org.benf.cfr.reader.util.AnalysisType;
 import org.benf.cfr.reader.util.ConfusedCFRException;
 import org.benf.cfr.reader.util.MiscConstants;
 import org.benf.cfr.reader.util.StringUtils;
@@ -31,13 +32,10 @@ import java.util.zip.ZipFile;
 import static org.benf.cfr.reader.bytecode.analysis.types.ClassNameUtils.getPackageAndClassNames;
 
 public class ClassFileSourceImpl implements ClassFileSource2 {
-
     private final Set<String> explicitJars = SetFactory.newSet();
-    private Map<String, String> classToPathMap;
-    // replace with BiDiMap
-    private Map<String, String> classCollisionRenamerLCToReal;
-    private Map<String, String> classCollisionRenamerRealToLC;
+    private Map<String, JarSourceEntry> classToPathMap;
     private final Options options;
+    private ClassRenamer classRenamer;
     /*
      * Initialisation info
      */
@@ -83,26 +81,23 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
 
     @Override
     public String getPossiblyRenamedPath(String path) {
-        if (classCollisionRenamerRealToLC == null) return path;
-        String res = classCollisionRenamerRealToLC.get(path + ".class");
+        if (classRenamer == null) return path;
+        String res = classRenamer.getRenamedClass(path + ".class");
         if (res == null) return path;
         return res.substring(0, res.length()-6);
     }
 
     @Override
     public Pair<byte [], String> getClassFileContent(final String inputPath) throws IOException {
-        Map<String, String> classPathFiles = getClassPathClasses();
+        Map<String, JarSourceEntry> classPathFiles = getClassPathClasses();
 
-        String jarName = classPathFiles.get(inputPath);
+        JarSourceEntry jarEntry = classPathFiles.get(inputPath);
 
         // If path is an alias due to case insensitivity, restore to the correct name here, before
         // accessing zipfile.
         String path = inputPath;
-        if (classCollisionRenamerLCToReal != null) {
-            String actualName = classCollisionRenamerLCToReal.get(path);
-            if (actualName != null) {
-                path = actualName;
-            }
+        if (classRenamer != null) {
+            path = classRenamer.getOriginalClass(path);
         }
 
         ZipFile zipFile = null;
@@ -122,15 +117,18 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
                 }
                 usePath = pathPrefix + usePath;
             }
-            boolean forceJar = explicitJars.contains(jarName);
+            boolean forceJar = jarEntry != null && explicitJars.contains(jarEntry.getPath());
             File file = forceJar ? null : new File(usePath);
             byte[] content;
             if (file != null && file.exists()) {
                 is = new FileInputStream(file);
                 length = file.length();
                 content = getBytesFromFile(is, length);
-            } else if (jarName != null) {
-                zipFile = new ZipFile(new File(jarName), ZipFile.OPEN_READ);
+            } else if (jarEntry != null) {
+                zipFile = new ZipFile(new File(jarEntry.getPath()), ZipFile.OPEN_READ);
+                if (jarEntry.analysisType == AnalysisType.WAR) {
+                    path = MiscConstants.WAR_PREFIX + path;
+                }
                 ZipEntry zipEntry = zipFile.getEntry(path);
                 length = zipEntry.getSize();
                 is = zipFile.getInputStream(zipEntry);
@@ -257,10 +255,10 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
 
     @Deprecated
     public Collection<String> addJar(String jarPath) {
-        return addJarContent(jarPath).getClassFiles();
+        return addJarContent(jarPath, AnalysisType.JAR).getClassFiles();
     }
 
-    public JarContent addJarContent(String jarPath) {
+    public JarContent addJarContent(String jarPath, AnalysisType analysisType) {
         // Make sure classpath is scraped first, so we'll overwrite it.
         getClassPathClasses();
 
@@ -269,39 +267,25 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
             throw new ConfusedCFRException("No such jar file " + jarPath);
         }
         jarPath = file.getAbsolutePath();
-        JarContent jarContent = processClassPathFile(file, false);
+        JarContent jarContent = processClassPathFile(file, false, analysisType);
         if (jarContent == null){
             throw new ConfusedCFRException("Failed to load jar " + jarPath);
         }
 
-        Set<String> dedup;
-        if (classCollisionRenamerLCToReal != null) {
-            final Map<String, List<String>> map = Functional.groupToMapBy(jarContent.getClassFiles(), new UnaryFunction<String, String>() {
-                @Override
-                public String invoke(String arg) {
-                    return arg.toLowerCase();
-                }
-            });
-            dedup = SetFactory.newSet(Functional.filter(map.keySet(), new Predicate<String>() {
-                @Override
-                public boolean test(String in) {
-                    return map.get(in).size() > 1;
-                }
-            }));
-        } else {
-            dedup = SetFactory.newSet();
+        JarSourceEntry sourceEntry = new JarSourceEntry(analysisType, jarPath);
+
+        if (classRenamer != null) {
+            classRenamer.notifyClassFiles(jarContent.getClassFiles());
         }
 
         List < String > output = ListFactory.newList();
         for (String classPath : jarContent.getClassFiles()) {
             if (classPath.toLowerCase().endsWith(".class")) {
                 // nb : entry.value will always be the jar here, but ....
-                if (classCollisionRenamerLCToReal != null) {
-                    String renamed = addDedupName(classPath, dedup, classCollisionRenamerLCToReal);
-                    classCollisionRenamerRealToLC.put(classPath, renamed);
-                    classPath = renamed;
+                if (classRenamer != null) {
+                    classPath = classRenamer.getRenamedClass(classPath);
                 }
-                classToPathMap.put(classPath, jarPath);
+                classToPathMap.put(classPath, sourceEntry);
                 output.add(classPath);
             }
         }
@@ -309,27 +293,36 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
         return jarContent;
     }
 
-    private static String addDedupName(String potDup, Set<String> collisions, Map<String, String> data) {
-        String n = potDup.toLowerCase();
-        String name = n.substring(0, n.length()-6);
-        int next = 0;
-        if (!collisions.contains(n)) return potDup;
-        String testName = name + "_" + next + ".class";
-        while (data.containsKey(testName)) {
-            testName = name + "_" + ++next + ".class";
+    private static class JarSourceEntry {
+        private final AnalysisType analysisType;
+        private final String path;
+
+        JarSourceEntry(AnalysisType analysisType, String path) {
+            this.analysisType = analysisType;
+            this.path = path;
         }
-        data.put(testName, potDup);
-        return testName;
+
+        @SuppressWarnings("unused")
+        public AnalysisType getAnalysisType() {
+            return analysisType;
+        }
+
+        public String getPath() {
+            return path;
+        }
     }
 
-    private Map<String, String> getClassPathClasses() {
+    private Map<String, JarSourceEntry> getClassPathClasses() {
         if (classToPathMap == null) {
-            boolean renameCase = (options.getOption(OptionsImpl.CASE_INSENSITIVE_FS_RENAME));
-
             boolean dump = options.getOption(OptionsImpl.DUMP_CLASS_PATH);
 
             classToPathMap = MapFactory.newMap();
-            String classPath = System.getProperty("java.class.path") + File.pathSeparatorChar + System.getProperty("sun.boot.class.path");
+            String classPath = System.getProperty("java.class.path");
+            String sunBootClassPath = System.getProperty("sun.boot.class.path");
+            if (sunBootClassPath != null) {
+                classPath += File.pathSeparatorChar + sunBootClassPath;
+            }
+
             if (dump) {
                 System.out.println("/* ClassPath Diagnostic - searching :" + classPath);
             }
@@ -338,10 +331,7 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
                 classPath = classPath + File.pathSeparatorChar + extraClassPath;
             }
 
-            if (renameCase) {
-                classCollisionRenamerLCToReal = MapFactory.newMap();
-                classCollisionRenamerRealToLC = MapFactory.newMap();
-            }
+            classRenamer = ClassRenamer.create(options);
 
             String[] classPaths = classPath.split("" + File.pathSeparatorChar);
             for (String path : classPaths) {
@@ -358,11 +348,11 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
                         File[] files = f.listFiles();
                         if (files != null) {
                             for (File file : files) {
-                                processClassPathFile(file, file.getAbsolutePath(), classToPathMap, dump);
+                                processClassPathFile(file, file.getAbsolutePath(), classToPathMap, AnalysisType.JAR, dump);
                             }
                         }
                     } else {
-                        processClassPathFile(f, path, classToPathMap, dump);
+                        processClassPathFile(f, path, classToPathMap, AnalysisType.JAR, dump);
                     }
                 } else {
                     if (dump) {
@@ -377,17 +367,18 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
         return classToPathMap;
     }
 
-    private void processClassPathFile(File file, String absolutePath, Map<String, String> classToPathMap, boolean dump) {
-        JarContent content = processClassPathFile(file, dump);
+    private void processClassPathFile(File file, String absolutePath, Map<String, JarSourceEntry> classToPathMap, AnalysisType analysisType, boolean dump) {
+        JarContent content = processClassPathFile(file, dump, analysisType);
         if (content == null) {
             return;
         }
+        JarSourceEntry sourceEntry = new JarSourceEntry(analysisType, absolutePath);
         for (String name : content.getClassFiles()) {
-            classToPathMap.put(name, absolutePath);
+            classToPathMap.put(name, sourceEntry);
         }
     }
 
-    private JarContent processClassPathFile(final File file, boolean dump) {
+    private JarContent processClassPathFile(final File file, boolean dump, AnalysisType analysisType) {
         List<String> content = ListFactory.newList();
         Map<String, String> manifest;
         try {
@@ -417,7 +408,23 @@ public class ClassFileSourceImpl implements ClassFileSource2 {
         } catch (IOException e) {
             return null;
         }
-        return new JarContentImpl(content, manifest);
+        if (analysisType == AnalysisType.WAR) {
+            // Strip WEB-INF/classes from the front of class files.
+            final int prefixLen = MiscConstants.WAR_PREFIX.length();
+            content = Functional.map(Functional.filter(content, new Predicate<String>() {
+                @Override
+                public boolean test(String in) {
+                    return in.startsWith(MiscConstants.WAR_PREFIX);
+                }
+            }), new UnaryFunction<String, String>() {
+                @Override
+                public String invoke(String arg) {
+                    return arg.substring(prefixLen);
+                }
+            });
+        }
+
+        return new JarContentImpl(content, manifest, analysisType);
     }
 
     private Map<String, String> getManifestContent(ZipFile zipFile) {

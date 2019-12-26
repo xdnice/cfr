@@ -1,15 +1,31 @@
 package org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters;
 
 import org.benf.cfr.reader.bytecode.analysis.opgraph.Op04StructuredStatement;
-import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.*;
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.AbstractMatchResultIterator;
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.MatchIterator;
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.MatchOneOf;
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.MatchSequence;
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.Matcher;
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.ResetAfterTest;
 import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.util.MiscStatementTools;
 import org.benf.cfr.reader.bytecode.analysis.parse.Expression;
 import org.benf.cfr.reader.bytecode.analysis.parse.LValue;
 import org.benf.cfr.reader.bytecode.analysis.parse.StatementContainer;
-import org.benf.cfr.reader.bytecode.analysis.parse.expression.*;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.ArithOp;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.ArithmeticMutationOperation;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.ArithmeticOperation;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.ArithmeticPostMutationOperation;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.ArithmeticPreMutationOperation;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.AssignmentExpression;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.CastExpression;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.LValueExpression;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.Literal;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.MemberFunctionInvokation;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.StackValue;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.StaticFunctionInvokation;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.SuperFunctionInvokation;
 import org.benf.cfr.reader.bytecode.analysis.parse.literal.TypedLiteral;
 import org.benf.cfr.reader.bytecode.analysis.parse.lvalue.LocalVariable;
-import org.benf.cfr.reader.bytecode.analysis.parse.lvalue.StackSSALabel;
 import org.benf.cfr.reader.bytecode.analysis.parse.lvalue.StaticVariable;
 import org.benf.cfr.reader.bytecode.analysis.parse.rewriters.AbstractExpressionRewriter;
 import org.benf.cfr.reader.bytecode.analysis.parse.rewriters.CloneHelper;
@@ -18,7 +34,9 @@ import org.benf.cfr.reader.bytecode.analysis.parse.rewriters.ExpressionRewriterF
 import org.benf.cfr.reader.bytecode.analysis.parse.utils.SSAIdentifiers;
 import org.benf.cfr.reader.bytecode.analysis.parse.wildcard.WildcardMatch;
 import org.benf.cfr.reader.bytecode.analysis.structured.StructuredStatement;
-import org.benf.cfr.reader.bytecode.analysis.structured.statement.*;
+import org.benf.cfr.reader.bytecode.analysis.structured.statement.StructuredAssignment;
+import org.benf.cfr.reader.bytecode.analysis.structured.statement.StructuredExpressionStatement;
+import org.benf.cfr.reader.bytecode.analysis.structured.statement.StructuredReturn;
 import org.benf.cfr.reader.bytecode.analysis.structured.statement.placeholder.BeginBlock;
 import org.benf.cfr.reader.bytecode.analysis.structured.statement.placeholder.EndBlock;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
@@ -36,7 +54,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewriter {
+public class SyntheticAccessorRewriter extends AbstractExpressionRewriter implements Op04Rewriter {
 
     private final DCCommonState state;
     private final JavaTypeInstance thisClassType;
@@ -57,14 +75,9 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
         }
     }
 
-
-    @Override
-    public void handleStatement(StatementContainer statementContainer) {
-    }
-
     /*
-         * Expression rewriter boilerplate - note that we can't expect ssaIdentifiers to be non-null.
-         */
+     * Expression rewriter boilerplate - note that we can't expect ssaIdentifiers to be non-null.
+     */
     @Override
     public Expression rewriteExpression(Expression expression, SSAIdentifiers ssaIdentifiers, StatementContainer statementContainer, ExpressionRewriterFlags flags) {
         // TODO : In practice, the rewrites are ALWAYS done in terms of static functions.
@@ -74,31 +87,15 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
             /*
              * REWRITE INSIDE OUT! First, rewrite args, THEN rewrite expression.
              */
-            return rewriteFunctionExpression((StaticFunctionInvokation) expression);
+            expression = rewriteFunctionExpression((StaticFunctionInvokation) expression);
         }
         return expression;
     }
 
     @Override
-    public ConditionalExpression rewriteExpression(ConditionalExpression expression, SSAIdentifiers ssaIdentifiers, StatementContainer statementContainer, ExpressionRewriterFlags flags) {
-        Expression res = expression.applyExpressionRewriter(this, ssaIdentifiers, statementContainer, flags);
-        return (ConditionalExpression) res;
-    }
-
-//    @Override
-//    public AbstractAssignmentExpression rewriteExpression(AbstractAssignmentExpression expression, SSAIdentifiers ssaIdentifiers, StatementContainer statementContainer, ExpressionRewriterFlags flags) {
-//        Expression res = expression.applyExpressionRewriter(this, ssaIdentifiers, statementContainer, flags);
-//        return (AbstractAssignmentExpression) res;
-//    }
-
-    @Override
     public LValue rewriteExpression(LValue lValue, SSAIdentifiers ssaIdentifiers, StatementContainer statementContainer, ExpressionRewriterFlags flags) {
-        return lValue;
-    }
-
-    @Override
-    public StackSSALabel rewriteExpression(StackSSALabel lValue, SSAIdentifiers ssaIdentifiers, StatementContainer statementContainer, ExpressionRewriterFlags flags) {
-        return lValue;
+        // Ecj will bury synthetic accessors in lvalues..... (see AnonymousInnerClassTest11c2).
+        return lValue.applyExpressionRewriter(this, ssaIdentifiers, statementContainer, flags);
     }
 
     private Expression rewriteFunctionExpression(final StaticFunctionInvokation functionInvokation) {
@@ -112,6 +109,7 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
     private static final String MUTATION1 = "mutation1";
     private static final String MUTATION2 = "mutation2";
     private static final String MUTATION3 = "mutation3";
+    private static final String ASSIGNMENT1 = "assignment1";
     private static final String PRE_INC = "preinc";
     private static final String POST_INC = "postinc";
     private static final String PRE_DEC = "predec";
@@ -203,6 +201,9 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
                                 new StructuredAssignment(wcm.getLValueWildCard("lvalue"), wcm.getExpressionWildCard("rvalue")),
                                 new StructuredReturn(new LValueExpression(wcm.getLValueWildCard("lvalue")), null)
                         )),
+                        new ResetAfterTest(wcm, ASSIGNMENT1, new MatchSequence(
+                                new StructuredAssignment(wcm.getLValueWildCard("lvalue"), wcm.getExpressionWildCard("rvalue"))
+                        )),
                         new ResetAfterTest(wcm, MUTATION2, new MatchSequence(
                                 new StructuredAssignment(wcm.getLValueWildCard("lvalue"), wcm.getExpressionWildCard("rvalue")),
                                 new StructuredReturn(wcm.getExpressionWildCard("rvalue"), null)
@@ -285,11 +286,12 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
                 LValue appliedLvalue = ((LValueExpression) appliedArg).getLValue();
                 lValueReplacements.put(methodArg, appliedLvalue);
             }
+            appliedArg = getCastFriendArg(otherType, methodArg, appliedArg);
             expressionReplacements.put(new LValueExpression(methodArg), appliedArg);
         }
         CloneHelper cloneHelper = new CloneHelper(expressionReplacements, lValueReplacements);
 
-        if (matchType.equals(MUTATION1) || matchType.equals(MUTATION2)) {
+        if (matchType.equals(MUTATION1) || matchType.equals(MUTATION2) || matchType.equals(ASSIGNMENT1)) {
             AssignmentExpression assignmentExpression = new AssignmentExpression(accessorMatchCollector.lValue, accessorMatchCollector.rValue);
             return cloneHelper.replaceOrClone(assignmentExpression);
         } else if (matchType.equals(MUTATION3)) {
@@ -330,7 +332,7 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
         public void collectMatches(String name, WildcardMatch wcm) {
             this.matchType = name;
             this.lValue = wcm.getLValueWildCard("lvalue").getMatch();
-            if (matchType.equals(MUTATION1) || matchType.equals(MUTATION2)) {
+            if (matchType.equals(MUTATION1) || matchType.equals(MUTATION2) || matchType.equals(ASSIGNMENT1)) {
                 this.rValue = wcm.getExpressionWildCard("rvalue").getMatch();
             }
             if (matchType.equals(MUTATION3)) {
@@ -388,10 +390,20 @@ public class SyntheticAccessorRewriter implements Op04Rewriter, ExpressionRewrit
                 LValue appliedLvalue = ((LValueExpression) appliedArg).getLValue();
                 lValueReplacements.put(methodArg, appliedLvalue);
             }
+            appliedArg = getCastFriendArg(otherType, methodArg, appliedArg);
             expressionReplacements.put(new LValueExpression(methodArg), appliedArg);
         }
         CloneHelper cloneHelper = new CloneHelper(expressionReplacements, lValueReplacements);
         return cloneHelper.replaceOrClone(funcMatchCollector.functionInvokation);
+    }
+
+    private Expression getCastFriendArg(JavaTypeInstance otherType, LocalVariable methodArg, Expression appliedArg) {
+        if (methodArg.getInferredJavaType().getJavaTypeInstance().equals(otherType)) {
+            if (!appliedArg.getInferredJavaType().getJavaTypeInstance().equals(otherType)) {
+                appliedArg = new CastExpression(methodArg.getInferredJavaType(), appliedArg);
+            }
+        }
+        return appliedArg;
     }
 
     private class FuncMatchCollector extends AbstractMatchResultIterator {

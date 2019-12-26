@@ -8,7 +8,11 @@ public class StringStreamDumper extends StreamDumper {
     private final StringBuilder stringBuilder;
 
     public StringStreamDumper(StringBuilder sb, TypeUsageInformation typeUsageInformation, Options options, IllegalIdentifierDump illegalIdentifierDump) {
-        super(typeUsageInformation, options, illegalIdentifierDump);
+        this(sb, typeUsageInformation, options, illegalIdentifierDump, new MovableDumperContext());
+    }
+
+    public StringStreamDumper(StringBuilder sb, TypeUsageInformation typeUsageInformation, Options options, IllegalIdentifierDump illegalIdentifierDump, MovableDumperContext context) {
+        super(typeUsageInformation, options, illegalIdentifierDump,context);
         this.stringBuilder = sb;
     }
 
@@ -23,5 +27,10 @@ public class StringStreamDumper extends StreamDumper {
 
     @Override
     public void addSummaryError(Method method, String s) {
+    }
+
+    @Override
+    public Dumper withTypeUsageInformation(TypeUsageInformation innerclassTypeUsageInformation) {
+        return new TypeOverridingDumper(this, innerclassTypeUsageInformation);
     }
 }

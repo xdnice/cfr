@@ -43,25 +43,25 @@ public class ClassFileDumperEnum extends AbstractClassFileDumper {
             int size = interfaces.size();
             for (int x = 0; x < size; ++x) {
                 JavaTypeInstance iface = interfaces.get(x);
-                d.dump(iface).print((x < (size - 1) ? ",\n" : "\n"));
+                d.dump(iface).print((x < (size - 1) ? "," : "")).newln();
             }
         }
     }
 
-    private static void dumpEntry(Dumper d, Pair<StaticVariable, AbstractConstructorInvokation> entry, boolean last) {
+    private static void dumpEntry(Dumper d, Pair<StaticVariable, AbstractConstructorInvokation> entry, boolean last, JavaTypeInstance classType) {
         StaticVariable staticVariable = entry.getFirst();
         AbstractConstructorInvokation constructorInvokation = entry.getSecond();
-        d.print(staticVariable.getFieldName());
+        d.fieldName(staticVariable.getFieldName(), classType, false, true, true);
 
         if (constructorInvokation instanceof ConstructorInvokationSimple) {
             List<Expression> args = constructorInvokation.getArgs();
             if (args.size() > 2) {
-                d.print('(');
+                d.separator("(");
                 for (int x = 2, len = args.size(); x < len; ++x) {
                     if (x > 2) d.print(", ");
                     d.dump(args.get(x));
                 }
-                d.print(')');
+                d.separator(")");
             }
         } else if (constructorInvokation instanceof ConstructorInvokationAnonymousInner) {
             ((ConstructorInvokationAnonymousInner) constructorInvokation).dumpForEnum(d);
@@ -71,7 +71,7 @@ public class ClassFileDumperEnum extends AbstractClassFileDumper {
         if (last) {
             d.endCodeln();
         } else {
-            d.print(",\n");
+            d.print(",").newln();
         }
     }
 
@@ -86,19 +86,21 @@ public class ClassFileDumperEnum extends AbstractClassFileDumper {
         dumpComments(classFile, d);
         dumpAnnotations(classFile, d);
         dumpHeader(classFile, innerClass, d);
-        d.print("{\n");
+        d.separator("{").newln();
         d.indent(1);
 
+        JavaTypeInstance classType = classFile.getClassType();
+
         for (int x = 0, len = entries.size(); x < len; ++x) {
-            dumpEntry(d, entries.get(x), (x == len - 1));
+            dumpEntry(d, entries.get(x), (x == len - 1), classType);
         }
 
-        d.print("\n");
+        d.newln();
 
         List<ClassFileField> fields = classFile.getFields();
         for (ClassFileField field : fields) {
             if (field.shouldNotDisplay()) continue;
-            field.dump(d);
+            field.dump(d, classFile);
         }
         List<Method> methods = classFile.getMethods();
         if (!methods.isEmpty()) {
@@ -110,7 +112,7 @@ public class ClassFileDumperEnum extends AbstractClassFileDumper {
         }
         classFile.dumpNamedInnerClasses(d);
         d.indent(-1);
-        d.print("}\n");
+        d.print("}").newln();
 
         return d;
     }

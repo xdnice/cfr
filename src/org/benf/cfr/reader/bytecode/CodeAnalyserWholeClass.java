@@ -19,6 +19,7 @@ import org.benf.cfr.reader.state.ClassCache;
 import org.benf.cfr.reader.state.DCCommonState;
 import org.benf.cfr.reader.util.*;
 import org.benf.cfr.reader.util.collections.Functional;
+import org.benf.cfr.reader.util.collections.MapFactory;
 import org.benf.cfr.reader.util.collections.SetFactory;
 import org.benf.cfr.reader.util.functors.Predicate;
 import org.benf.cfr.reader.util.functors.UnaryFunction;
@@ -55,14 +56,14 @@ public class CodeAnalyserWholeClass {
         }
 
         if (options.getOption(OptionsImpl.SUGAR_ASSERTS)) {
-            resugarAsserts(classFile, options);
+            resugarAsserts(classFile);
         }
 
         tidyAnonymousConstructors(classFile);
 
         if (options.getOption(OptionsImpl.LIFT_CONSTRUCTOR_INIT)) {
-            liftStaticInitialisers(classFile, options);
-            liftNonStaticInitialisers(classFile, options);
+            liftStaticInitialisers(classFile);
+            liftNonStaticInitialisers(classFile);
         }
 
         if (options.getOption(OptionsImpl.JAVA_4_CLASS_OBJECTS, classFile.getClassFileVersion())) {
@@ -222,7 +223,8 @@ public class CodeAnalyserWholeClass {
      * then we mark that as a synthetic outer.
      */
     private static void removeInnerClassOuterThis(ClassFile classFile) {
-
+        // This is a reasonable test, but SOME compilers may not honour it.
+        // See below where we check anonymous callers too.
         if (classFile.testAccessFlag(AccessFlag.ACC_STATIC)) return;
 
         /*
@@ -230,6 +232,8 @@ public class CodeAnalyserWholeClass {
          * or are chained constructors.  If they're chained constructors, they should
          * have the outer arg, but we can't verify that they assign to the field.
          */
+
+
         FieldVariable foundOuterThis = null;
         ClassFileField classFileField = null;
         for (Method method : classFile.getConstructors()) {
@@ -244,6 +248,42 @@ public class CodeAnalyserWholeClass {
             }
         }
         if (foundOuterThis == null) return;
+
+        // If the type we seek isn't a transitive inner class, then the outer this relationship doesn't hold.
+        JavaTypeInstance fieldType = foundOuterThis.getInferredJavaType().getJavaTypeInstance();
+        JavaTypeInstance classType = classFile.getClassType();
+        if (!classType.getInnerClassHereInfo().isTransitiveInnerClassOf(fieldType)) {
+            // The class has been falsely marked as instance - it's static!
+            classFile.getAccessFlags().add(AccessFlag.ACC_STATIC);
+            return;
+        }
+
+        // This is overly paranoid, need to create motivating example.
+        // What we're checking is - does this inner class pretend to be non static,
+        // but is called from a static method in its owner?
+//        // Do we have an anonymous use from a method belonging to foundOuterThis which is actually static?
+//        // If so, we are missing a static annotation!
+//        if (!anonUses.isEmpty()) {
+//            // Paranoid - only check if we actually have anonymous usages, and if so require all
+//            // of them to be static (even though there should only ever be 1).
+//            JavaTypeInstance foundOuterType = foundOuterThis.getInferredJavaType().getJavaTypeInstance();
+//            boolean isStatic = true;
+//            boolean isFound = false;
+//            for (AnonymousUse use : anonUses) {
+//                Method caller = use.getCaller();
+//                if (caller.getClassFile().getClassType() == foundOuterType) {
+//                    isFound = true;
+//                    if (!caller.testAccessFlag(AccessFlagMethod.ACC_STATIC)) {
+//                        isStatic = false;
+//                        break;
+//                    }
+//                }
+//            }
+//            if (isFound && isStatic) {
+//                classFile.getAccessFlags().add(AccessFlag.ACC_STATIC);
+//                return;
+//            }
+//        }
 
         classFileField.markHidden();
         classFileField.markSyntheticOuterRef();
@@ -265,13 +305,13 @@ public class CodeAnalyserWholeClass {
          * Find all instances of 'this'.fieldVariable in the class, and replace with
          * OuterClassName.this
          */
-        JavaTypeInstance fieldType = foundOuterThis.getInferredJavaType().getJavaTypeInstance();
         if (!(fieldType instanceof JavaRefTypeInstance)) {
             return;
         }
         JavaRefTypeInstance fieldRefType = (JavaRefTypeInstance) fieldType.getDeGenerifiedType();
         String name = fieldRefType.getRawShortName();
-        String explicitName = name + ".this";
+        // This hack causes problems when renaming classes......
+        String explicitName = name + MiscConstants.DOT_THIS;
         if (fieldRefType.getInnerClassHereInfo().isMethodScopedClass()) {
             // We're referring to a value captured from the anonymous class.
             // What we *Should* do is drop the field reference completely.
@@ -310,13 +350,13 @@ public class CodeAnalyserWholeClass {
      * b) interfaces MAY have static initialisers, but MAY NOT have clinit methods.
      *    (in java 1.7)
      */
-    private static void liftStaticInitialisers(ClassFile classFile, Options state) {
+    private static void liftStaticInitialisers(ClassFile classFile) {
         Method staticInit = getStaticConstructor(classFile);
         if (staticInit == null) return;
         new StaticLifter(classFile).liftStatics(staticInit);
     }
 
-    private static void liftNonStaticInitialisers(ClassFile classFile, Options state) {
+    private static void liftNonStaticInitialisers(ClassFile classFile) {
         new NonStaticLifter(classFile).liftNonStatics();
     }
 
@@ -424,21 +464,32 @@ public class CodeAnalyserWholeClass {
         }
 
         if (!MiscStatementTools.isDeadCode(constructor.getAnalysis())) return;
-        classFile.removePointlessMethod(constructor);
+        constructor.hideDead();
     }
 
     /* Performed prior to lifting code into fields, just check code */
     private static void removeIllegalGenerics(ClassFile classFile, Options state) {
         ConstantPool cp = classFile.getConstantPool();
-        ExpressionRewriter r = new IllegalGenericRewriter(cp);
+        JavaRefTypeInstance classType = classFile.getRefClassType();
+        Map<String, FormalTypeParameter> params = FormalTypeParameter.getMap(classFile.getClassSignature().getFormalTypeParameters());
 
         for (Method m : classFile.getMethods()) {
-            if (!m.hasCodeAttribute()) return;
+            if (!m.hasCodeAttribute()) continue;
             Op04StructuredStatement code = m.getAnalysis();
             if (!code.isFullyStructured()) continue;
 
             List<StructuredStatement> statements = MiscStatementTools.linearise(code);
-            if (statements == null) return;
+            if (statements == null) continue;
+
+            boolean bStatic = m.testAccessFlag(AccessFlagMethod.ACC_STATIC);
+            Map<String, FormalTypeParameter> formalParams = MapFactory.newMap();
+            if (!bStatic) {
+                formalParams.putAll(params);
+            }
+            // if the method or the class (for instance) has unbound generics, these are allowed.
+            formalParams.putAll(m.getMethodPrototype().getFormalParameterMap());
+
+            ExpressionRewriter r = new IllegalGenericRewriter(cp, formalParams);
 
             for (StructuredStatement statement : statements) {
                 statement.rewriteExpressions(r);
@@ -450,7 +501,7 @@ public class CodeAnalyserWholeClass {
         }
     }
 
-    private static void resugarAsserts(ClassFile classFile, Options state) {
+    private static void resugarAsserts(ClassFile classFile) {
         Method staticInit = getStaticConstructor(classFile);
         if (staticInit != null) {
             new AssertRewriter(classFile).sugarAsserts(staticInit);
@@ -487,6 +538,15 @@ public class CodeAnalyserWholeClass {
         /*
          * Rewrite 'outer.this' references.
          */
+//        if (options.getOption(OptionsImpl.REMOVE_INNER_CLASS_SYNTHETICS)) {
+//            if (classFile.isInnerClass()) {
+//                removeInnerClassOuterThis(classFile);
+//            }
+//            // Synthetic constructor friends can exist on OUTER classes, when an inner makes a call out.
+//            removeInnerClassSyntheticConstructorFriends(classFile);
+//        }
+//
+
         if (options.getOption(OptionsImpl.REMOVE_INNER_CLASS_SYNTHETICS)) {
 
             /*

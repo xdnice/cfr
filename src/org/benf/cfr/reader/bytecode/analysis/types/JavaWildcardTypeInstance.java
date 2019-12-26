@@ -3,6 +3,7 @@ package org.benf.cfr.reader.bytecode.analysis.types;
 import org.benf.cfr.reader.bytecode.analysis.types.annotated.JavaAnnotatedTypeInstance;
 import org.benf.cfr.reader.entities.annotations.AnnotationTableTypeEntry;
 import org.benf.cfr.reader.entities.constantpool.ConstantPool;
+import org.benf.cfr.reader.state.ObfuscationTypeMap;
 import org.benf.cfr.reader.state.TypeUsageCollector;
 import org.benf.cfr.reader.state.TypeUsageInformation;
 import org.benf.cfr.reader.util.DecompilerComments;
@@ -11,6 +12,7 @@ import org.benf.cfr.reader.util.output.Dumper;
 import org.benf.cfr.reader.util.output.ToStringDumper;
 
 import java.util.List;
+import java.util.Map;
 
 public class JavaWildcardTypeInstance implements JavaGenericBaseInstance {
     private final WildcardType wildcardType;
@@ -111,9 +113,9 @@ public class JavaWildcardTypeInstance implements JavaGenericBaseInstance {
     }
 
     @Override
-    public boolean hasForeignUnbound(ConstantPool cp, int depth, boolean noWildcard) {
+    public boolean hasForeignUnbound(ConstantPool cp, int depth, boolean noWildcard, Map<String, FormalTypeParameter> externals) {
         if (underlyingType instanceof JavaGenericBaseInstance) {
-            return ((JavaGenericBaseInstance) underlyingType).hasForeignUnbound(cp, depth, noWildcard);
+            return ((JavaGenericBaseInstance) underlyingType).hasForeignUnbound(cp, depth, noWildcard, externals);
         }
         return false;
     }
@@ -240,6 +242,11 @@ public class JavaWildcardTypeInstance implements JavaGenericBaseInstance {
     @Override
     public JavaGenericRefTypeInstance asGenericRefInstance(JavaTypeInstance other) {
         return null;
+    }
+
+    @Override
+    public JavaTypeInstance deObfuscate(ObfuscationTypeMap obfuscationTypeMap) {
+        return new JavaWildcardTypeInstance(wildcardType, obfuscationTypeMap.get(underlyingType));
     }
 
     @Override

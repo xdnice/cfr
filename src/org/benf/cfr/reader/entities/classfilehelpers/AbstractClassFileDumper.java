@@ -1,13 +1,22 @@
 package org.benf.cfr.reader.entities.classfilehelpers;
 
-import org.benf.cfr.reader.bytecode.analysis.types.*;
+import org.benf.cfr.reader.bytecode.analysis.types.ClassSignature;
+import org.benf.cfr.reader.bytecode.analysis.types.FormalTypeParameter;
+import org.benf.cfr.reader.bytecode.analysis.types.InnerClassInfoUtils;
+import org.benf.cfr.reader.bytecode.analysis.types.JavaRefTypeInstance;
+import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
 import org.benf.cfr.reader.entities.AccessFlag;
 import org.benf.cfr.reader.entities.ClassFile;
+import org.benf.cfr.reader.entities.Method;
+import org.benf.cfr.reader.entities.attributes.AttributeMap;
 import org.benf.cfr.reader.entities.attributes.AttributeRuntimeInvisibleAnnotations;
 import org.benf.cfr.reader.entities.attributes.AttributeRuntimeVisibleAnnotations;
 import org.benf.cfr.reader.state.DCCommonState;
 import org.benf.cfr.reader.state.TypeUsageInformation;
-import org.benf.cfr.reader.util.*;
+import org.benf.cfr.reader.util.CannotLoadClassException;
+import org.benf.cfr.reader.util.DecompilerComments;
+import org.benf.cfr.reader.util.MiscConstants;
+import org.benf.cfr.reader.util.StringUtils;
 import org.benf.cfr.reader.util.collections.Functional;
 import org.benf.cfr.reader.util.collections.ListFactory;
 import org.benf.cfr.reader.util.functors.Predicate;
@@ -43,8 +52,8 @@ abstract class AbstractClassFileDumper implements ClassFileDumper {
         Options options = dcCommonState.getOptions();
         String header = MiscConstants.CFR_HEADER_BRA +
                 (options.getOption(OptionsImpl.SHOW_CFR_VERSION) ? (" " + MiscConstants.CFR_VERSION) : "") + ".";
-        d.print("/*").newln();
-        d.print(" * ").print(header).newln();
+        d.beginBlockComment(false);
+        d.print(header).newln();
         if (options.getOption(OptionsImpl.DECOMPILER_COMMENTS)) {
             TypeUsageInformation typeUsageInformation = d.getTypeUsageInformation();
             List<JavaTypeInstance> couldNotLoad = ListFactory.newList();
@@ -61,34 +70,36 @@ abstract class AbstractClassFileDumper implements ClassFileDumper {
                 }
             }
             if (!couldNotLoad.isEmpty()) {
-                d.print(" * ").newln();
-                d.print(" * Could not load the following classes:").newln();
+                d.newln();
+                d.print("Could not load the following classes:").newln();
                 for (JavaTypeInstance type : couldNotLoad) {
-                    d.print(" *  ").print(type.getRawName()).newln();
+                    d.print(" ").print(type.getRawName()).newln();
                 }
             }
         }
-        d.print(" */").newln();
-        String packageName = classFile.getThisClassConstpoolEntry().getPackageName();
-        if (!packageName.isEmpty()) {
-            d.print("package ").print(packageName).endCodeln().newln();
-        }
+        d.endBlockComment();
+        // package name may be empty, in which case it's ignored by dumper.
+        d.packageName(classFile.getRefClassType());
     }
 
     static void getFormalParametersText(ClassSignature signature, Dumper d) {
         List<FormalTypeParameter> formalTypeParameters = signature.getFormalTypeParameters();
         if (formalTypeParameters == null || formalTypeParameters.isEmpty()) return;
-        d.print('<');
+        d.separator("<");
         boolean first = true;
         for (FormalTypeParameter formalTypeParameter : formalTypeParameters) {
             first = StringUtils.comma(first, d);
             d.dump(formalTypeParameter);
         }
-        d.print('>');
+        d.print(">");
     }
 
     void dumpImports(Dumper d, ClassFile classFile) {
-        List<JavaTypeInstance> classTypes = classFile.getAllClassTypes();
+        /*
+         * It's a bit irritating that we have to check obfuscations here, but we are stripping unused types,
+         * and don't want to strip obfuscated names.
+         */
+        List<JavaTypeInstance> classTypes = d.getObfuscationMapping().get(classFile.getAllClassTypes());
         Set<JavaRefTypeInstance> types = d.getTypeUsageInformation().getShortenedClassTypes();
         //noinspection SuspiciousMethodCalls
         types.removeAll(classTypes);
@@ -144,9 +155,25 @@ abstract class AbstractClassFileDumper implements ClassFileDumper {
         if (names.isEmpty()) return;
         Collections.sort(names);
         for (String name : names) {
-            d.print("import " + name + ";\n");
+            d.keyword("import ").print(name + ";").newln();
         }
-        d.print("\n");
+        d.newln();
+    }
+
+    void dumpMethods(ClassFile classFile, Dumper d, boolean first, boolean asClass) {
+        List<Method> methods = classFile.getMethods();
+        if (!methods.isEmpty()) {
+            for (Method method : methods) {
+                if (method.hiddenState() != Method.Visibility.Visible) {
+                    continue;
+                }
+                if (!first) {
+                    d.newln();
+                }
+                first = false;
+                method.dump(d, asClass);
+            }
+        }
     }
 
     void dumpComments(ClassFile classFile, Dumper d) {
@@ -156,8 +183,9 @@ abstract class AbstractClassFileDumper implements ClassFileDumper {
     }
 
     void dumpAnnotations(ClassFile classFile, Dumper d) {
-        AttributeRuntimeVisibleAnnotations runtimeVisibleAnnotations = classFile.getAttributeByName(AttributeRuntimeVisibleAnnotations.ATTRIBUTE_NAME);
-        AttributeRuntimeInvisibleAnnotations runtimeInvisibleAnnotations = classFile.getAttributeByName(AttributeRuntimeInvisibleAnnotations.ATTRIBUTE_NAME);
+        AttributeMap classFileAttributes = classFile.getAttributes();
+        AttributeRuntimeVisibleAnnotations runtimeVisibleAnnotations = classFileAttributes.getByName(AttributeRuntimeVisibleAnnotations.ATTRIBUTE_NAME) ;
+        AttributeRuntimeInvisibleAnnotations runtimeInvisibleAnnotations = classFileAttributes.getByName(AttributeRuntimeInvisibleAnnotations.ATTRIBUTE_NAME);
         if (runtimeVisibleAnnotations != null) runtimeVisibleAnnotations.dump(d);
         if (runtimeInvisibleAnnotations != null) runtimeInvisibleAnnotations.dump(d);
     }

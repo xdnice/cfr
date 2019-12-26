@@ -1,5 +1,6 @@
 package org.benf.cfr.reader.util.output;
 
+import org.benf.cfr.reader.bytecode.analysis.opgraph.op3rewriters.Misc;
 import org.benf.cfr.reader.bytecode.analysis.variables.Keywords;
 import org.benf.cfr.reader.util.collections.MapFactory;
 import org.benf.cfr.reader.util.MiscConstants;
@@ -8,10 +9,15 @@ import java.util.Map;
 
 public class IllegalIdentifierReplacement implements IllegalIdentifierDump {
     private final Map<String, Integer> rewrites = MapFactory.newMap();
+    private static final Map<String, Boolean> known = MapFactory.newIdentityMap();
     private int next = 0;
 
     private static final IllegalIdentifierReplacement instance = new IllegalIdentifierReplacement();
 
+    static {
+        known.put(MiscConstants.THIS, true);
+        known.put(MiscConstants.NEW, true);
+    }
 
     private IllegalIdentifierReplacement() {
     }
@@ -44,7 +50,8 @@ public class IllegalIdentifierReplacement implements IllegalIdentifierDump {
     // Ending in .this is a hack, need to fix .this appending elsewhere.
     public static boolean isIllegal(String identifier) {
         if (!isIllegal2(identifier)) return false;
-        if (identifier.endsWith(".this")) return false;
+        if (identifier.endsWith(MiscConstants.DOT_THIS)) return false;
+        if (known.containsKey(identifier)) return false;
         return true;
     }
 

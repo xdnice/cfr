@@ -7,8 +7,11 @@ import org.benf.cfr.reader.bytecode.analysis.types.ClassNameUtils;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaRefTypeInstance;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
 import org.benf.cfr.reader.entities.ClassFile;
+import org.benf.cfr.reader.mapping.NullMapping;
+import org.benf.cfr.reader.mapping.ObfuscationMapping;
 import org.benf.cfr.reader.util.AnalysisType;
 import org.benf.cfr.reader.util.CannotLoadClassException;
+import org.benf.cfr.reader.util.DecompilerComment;
 import org.benf.cfr.reader.util.MiscConstants;
 import org.benf.cfr.reader.util.bytestream.BaseByteData;
 import org.benf.cfr.reader.util.bytestream.ByteData;
@@ -20,7 +23,11 @@ import org.benf.cfr.reader.util.functors.UnaryFunction;
 import org.benf.cfr.reader.util.getopt.Options;
 
 import java.io.File;
-import java.util.*;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 
 public class DCCommonState {
@@ -31,6 +38,7 @@ public class DCCommonState {
     private final Map<String, ClassFile> classFileCache;
     private Set<JavaTypeInstance> versionCollisions;
     private transient LinkedHashSet<String> couldNotLoadClasses = new LinkedHashSet<String>();
+    private final ObfuscationMapping obfuscationMapping;
 
     public DCCommonState(Options options, ClassFileSource2 classFileSource) {
         this.options = options;
@@ -43,6 +51,7 @@ public class DCCommonState {
             }
         });
         this.versionCollisions = SetFactory.newSet();
+        this.obfuscationMapping = NullMapping.INSTANCE;
     }
 
     public DCCommonState(DCCommonState dcCommonState, final BinaryFunction<String, DCCommonState, ClassFile> cacheAccess) {
@@ -56,6 +65,22 @@ public class DCCommonState {
             }
         });
         this.versionCollisions = dcCommonState.versionCollisions;
+        this.obfuscationMapping = dcCommonState.obfuscationMapping;
+    }
+
+    // TODO : If we have any more of these, refactor to a builder!
+    public DCCommonState(DCCommonState dcCommonState, ObfuscationMapping mapping) {
+        this.options = dcCommonState.options;
+        this.classFileSource = dcCommonState.classFileSource;
+        this.classCache = new ClassCache(this);
+        this.classFileCache = MapFactory.newExceptionRetainingLazyMap(new UnaryFunction<String, ClassFile>() {
+            @Override
+            public ClassFile invoke(String arg) {
+                return loadClassFileAtPath(arg);
+            }
+        });
+        this.versionCollisions = dcCommonState.versionCollisions;
+        this.obfuscationMapping = mapping;
     }
 
     public void setCollisions(Set<JavaTypeInstance> versionCollisions) {
@@ -90,14 +115,22 @@ public class DCCommonState {
         }
     }
 
+    public DecompilerComment renamedTypeComment(String typeName) {
+        String originalName = classCache.getOriginalName(typeName);
+        if (originalName != null) {
+            return new DecompilerComment("Renamed from " + originalName);
+        }
+        return null;
+    }
+
     private static boolean isMultiReleaseJar(JarContent jarContent) {
         String val = jarContent.getManifestEntries().get(MiscConstants.MULTI_RELEASE_KEY);
         if (val == null) return false;
         return Boolean.parseBoolean(val);
     }
 
-    public TreeMap<Integer, List<JavaTypeInstance>> explicitlyLoadJar(String path) {
-        JarContent jarContent = classFileSource.addJarContent(path);
+    public TreeMap<Integer, List<JavaTypeInstance>> explicitlyLoadJar(String path, AnalysisType type) {
+        JarContent jarContent = classFileSource.addJarContent(path, type);
 
         TreeMap<Integer, List<JavaTypeInstance>> baseRes = MapFactory.newTreeMap();
         Map<Integer, List<JavaTypeInstance>> res = MapFactory.newLazyMap(baseRes, new UnaryFunction<Integer, List<JavaTypeInstance>>() {
@@ -182,8 +215,12 @@ public class DCCommonState {
     // No fancy file identification right now, just very very simple.
     public AnalysisType detectClsJar(String path) {
         String lcPath = path.toLowerCase();
-        if (lcPath.endsWith(".jar") || lcPath.endsWith(".war")) return AnalysisType.JAR;
+        if (lcPath.endsWith(".jar")) return AnalysisType.JAR;
+        if (lcPath.endsWith(".war")) return AnalysisType.WAR;
         return AnalysisType.CLASS;
     }
 
+    public ObfuscationMapping getObfuscationMapping() {
+        return obfuscationMapping;
+    }
 }

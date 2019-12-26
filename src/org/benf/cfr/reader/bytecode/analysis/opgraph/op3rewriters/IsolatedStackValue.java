@@ -2,9 +2,7 @@ package org.benf.cfr.reader.bytecode.analysis.opgraph.op3rewriters;
 
 import org.benf.cfr.reader.bytecode.analysis.opgraph.Op03SimpleStatement;
 import org.benf.cfr.reader.bytecode.analysis.parse.Expression;
-import org.benf.cfr.reader.bytecode.analysis.parse.LValue;
 import org.benf.cfr.reader.bytecode.analysis.parse.Statement;
-import org.benf.cfr.reader.bytecode.analysis.parse.expression.LValueExpression;
 import org.benf.cfr.reader.bytecode.analysis.parse.expression.StackValue;
 import org.benf.cfr.reader.bytecode.analysis.parse.lvalue.StackSSALabel;
 import org.benf.cfr.reader.bytecode.analysis.parse.statement.AssignmentSimple;
@@ -32,8 +30,9 @@ class IsolatedStackValue {
             if (stm instanceof ExpressionStatement) {
                 Expression expression = ((ExpressionStatement) stm).getExpression();
                 if (expression instanceof StackValue) {
-                    StackSSALabel stackValue = ((StackValue) expression).getStackValue();
-                    if (consumptions.put(stackValue, statement) != null) {
+                    StackValue sv = (StackValue)expression;
+                    StackSSALabel stackValue = sv.getStackValue();
+                    if (consumptions.put(stackValue, statement) != null|| stackValue.getStackEntry().getUsageCount() > 1) {
                         blackList.add(stackValue);
                     }
                 }

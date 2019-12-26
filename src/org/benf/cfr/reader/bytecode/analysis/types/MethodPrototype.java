@@ -150,11 +150,7 @@ public class MethodPrototype implements TypeUsageCollectable {
     }
 
     public Map<String, FormalTypeParameter> getFormalParameterMap() {
-        Map<String, FormalTypeParameter> res = MapFactory.newMap();
-        for (FormalTypeParameter p : formalTypeParameters) {
-            res.put(p.getName(), p);
-        }
-        return res;
+        return FormalTypeParameter.getMap(formalTypeParameters);
     }
 
     public void setDescriptorProto(MethodPrototype descriptorProto) {
@@ -176,18 +172,19 @@ public class MethodPrototype implements TypeUsageCollectable {
     public void dumpDeclarationSignature(Dumper d, String methName, Method.MethodConstructor isConstructor, MethodPrototypeAnnotationsHelper annotationsHelper) {
 
         if (formalTypeParameters != null) {
-            d.print('<');
+            //  according to the JLS, these are operators.  Tempting to define a new category.
+            d.operator("<");
             boolean first = true;
             for (FormalTypeParameter formalTypeParameter : formalTypeParameters) {
                 first = StringUtils.comma(first, d);
                 d.dump(formalTypeParameter);
             }
-            d.print("> ");
+            d.operator("> ");
         }
         if (!isConstructor.isConstructor()) {
             d.dump(result).print(" ");
         }
-        d.identifier(methName).print("(");
+        d.methodName(methName, this, isConstructor.isConstructor(), true).separator("(");
         /* We don't get a vararg type to change itself, as it's a function of the method, not the type
          */
 
@@ -221,9 +218,10 @@ public class MethodPrototype implements TypeUsageCollectable {
             } else {
                 d.dump(arg);
             }
-            d.print(" ").dump(param.getName());
+            d.print(" ");
+            param.getName().dump(d, true);
         }
-        d.print(")");
+        d.separator(")");
     }
 
     public boolean parametersComputed() {
@@ -443,6 +441,29 @@ public class MethodPrototype implements TypeUsageCollectable {
 
     public List<JavaTypeInstance> getArgs() {
         return args;
+    }
+
+    public List<JavaTypeInstance> getSignatureBoundArgs() {
+        if (classFile == null) {
+            return args;
+        }
+        ClassSignature sig = classFile.getClassSignature();
+        List<FormalTypeParameter> ftp = sig.getFormalTypeParameters();
+        if (ftp == null && formalTypeParameters == null) {
+            return args;
+        }
+        final GenericTypeBinder gtb = GenericTypeBinder.create(ftp, formalTypeParameters);
+        return Functional.map(args, new UnaryFunction<JavaTypeInstance, JavaTypeInstance>() {
+            @Override
+            public JavaTypeInstance invoke(JavaTypeInstance arg) {
+                JavaTypeInstance res = arg;
+                do {
+                    arg = res;
+                    res = gtb.getBindingFor(arg);
+                } while (res instanceof JavaGenericPlaceholderTypeInstance);
+                return res;
+            }
+        });
     }
 
     public int getVisibleArgCount() {

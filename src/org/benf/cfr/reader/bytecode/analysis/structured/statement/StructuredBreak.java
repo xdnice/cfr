@@ -31,10 +31,11 @@ public class StructuredBreak extends AbstractStructuredStatement {
     @Override
     public Dumper dump(Dumper dumper) {
         if (localBreak) {
-            dumper.print("break;\n");
+            dumper.keyword("break").print(";");
         } else {
-            dumper.print("break " + breakBlock.getName() + ";\n");
+            dumper.keyword("break ").print(breakBlock.getName() + ";");
         }
+        dumper.newln();
         return dumper;
     }
 

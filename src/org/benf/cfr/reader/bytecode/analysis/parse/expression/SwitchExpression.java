@@ -70,30 +70,30 @@ public class SwitchExpression extends AbstractExpression {
 
     @Override
     public Dumper dumpInner(Dumper d) {
-        d.print("switch (");
+        d.keyword("switch ").separator("(");
         d.dump(value);
-        d.print(") {");
+        d.separator(") ").separator("{");
         d.newln();
         d.indent(1);
         for (Branch item : cases) {
             boolean first = true;
             List<Expression> cases = item.cases;
             if (cases.isEmpty()) {
-                d.print("default");
+                d.keyword("default");
             } else {
-                d.print("case ");
+                d.keyword("case ");
                 for (Expression e : cases) {
                     first = StringUtils.comma(first, d);
                     d.dump(e);
                 }
             }
-            d.print(" -> ").dump(item.value);
+            d.operator(" -> ").dump(item.value);
             if (!(item.value instanceof StructuredStatementExpression)) {
-                d.print(';').newln();
+                d.endCodeln();
             }
         }
         d.indent(-1);
-        d.print("}");
+        d.separator("}");
         return d;
     }
 

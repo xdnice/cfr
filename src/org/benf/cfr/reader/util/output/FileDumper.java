@@ -37,10 +37,10 @@ public class FileDumper extends StreamDumper {
     }
 
     FileDumper(String dir, boolean clobber, JavaTypeInstance type, SummaryDumper summaryDumper, TypeUsageInformation typeUsageInformation, Options options, IllegalIdentifierDump illegalIdentifierDump) {
-        super(typeUsageInformation, options, illegalIdentifierDump);
+        super(typeUsageInformation, options, illegalIdentifierDump, new MovableDumperContext());
         this.type = type;
         this.summaryDumper = summaryDumper;
-        Pair<String, String> names = ClassNameUtils.getPackageAndClassNames(type.getRawName());
+        Pair<String, String> names = ClassNameUtils.getPackageAndClassNames(type);
         try {
             String fileName = mkFilename(dir, names, summaryDumper);
             File file = new File(fileName);
@@ -83,5 +83,10 @@ public class FileDumper extends StreamDumper {
     @Override
     public void addSummaryError(Method method, String s) {
         summaryDumper.notifyError(type, method, s);
+    }
+
+    @Override
+    public Dumper withTypeUsageInformation(TypeUsageInformation innerclassTypeUsageInformation) {
+        return new TypeOverridingDumper(this, innerclassTypeUsageInformation);
     }
 }

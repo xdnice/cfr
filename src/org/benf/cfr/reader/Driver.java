@@ -4,10 +4,13 @@ import org.benf.cfr.reader.bytecode.analysis.types.InnerClassInfo;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
 import org.benf.cfr.reader.entities.ClassFile;
 import org.benf.cfr.reader.entities.Method;
+import org.benf.cfr.reader.mapping.MappingFactory;
+import org.benf.cfr.reader.mapping.ObfuscationMapping;
 import org.benf.cfr.reader.relationship.MemberNameResolver;
 import org.benf.cfr.reader.state.DCCommonState;
-import org.benf.cfr.reader.state.TypeUsageCollector;
-import org.benf.cfr.reader.state.TypeUsageCollectorImpl;
+import org.benf.cfr.reader.state.TypeUsageCollectingDumper;
+import org.benf.cfr.reader.state.TypeUsageInformation;
+import org.benf.cfr.reader.util.AnalysisType;
 import org.benf.cfr.reader.util.CannotLoadClassException;
 import org.benf.cfr.reader.util.MiscConstants;
 import org.benf.cfr.reader.util.MiscUtils;
@@ -18,7 +21,14 @@ import org.benf.cfr.reader.util.functors.BinaryFunction;
 import org.benf.cfr.reader.util.functors.Predicate;
 import org.benf.cfr.reader.util.getopt.Options;
 import org.benf.cfr.reader.util.getopt.OptionsImpl;
-import org.benf.cfr.reader.util.output.*;
+import org.benf.cfr.reader.util.output.Dumper;
+import org.benf.cfr.reader.util.output.DumperFactory;
+import org.benf.cfr.reader.util.output.ExceptionDumper;
+import org.benf.cfr.reader.util.output.IllegalIdentifierDump;
+import org.benf.cfr.reader.util.output.NopSummaryDumper;
+import org.benf.cfr.reader.util.output.ProgressDumper;
+import org.benf.cfr.reader.util.output.SummaryDumper;
+import org.benf.cfr.reader.util.output.ToStringDumper;
 
 import java.util.Collections;
 import java.util.List;
@@ -29,6 +39,9 @@ class Driver {
 
     static void doClass(DCCommonState dcCommonState, String path, boolean skipInnerClass, DumperFactory dumperFactory) {
         Options options = dcCommonState.getOptions();
+        ObfuscationMapping mapping = MappingFactory.get(options, dcCommonState);
+        dcCommonState = new DCCommonState(dcCommonState, mapping);
+
         IllegalIdentifierDump illegalIdentifierDump = IllegalIdentifierDump.Factory.get(options);
         Dumper d = new ToStringDumper(); // sentinel dumper.
         ExceptionDumper ed = dumperFactory.getExceptionDumper();
@@ -59,10 +72,13 @@ class Driver {
             /*
              * Perform a pass to determine what imports / classes etc we used / failed.
              */
-            TypeUsageCollector collectingDumper = new TypeUsageCollectorImpl(options, c);
-            c.collectTypeUsages(collectingDumper);
+            TypeUsageCollectingDumper collectingDumper = new TypeUsageCollectingDumper(options, c);
+            c.dump(collectingDumper);
 
-            d = dumperFactory.getNewTopLevelDumper(c.getClassType(), summaryDumper, collectingDumper.getTypeUsageInformation(), illegalIdentifierDump);
+            TypeUsageInformation typeUsageInformation = collectingDumper.getRealTypeUsageInformation();
+
+            d = dumperFactory.getNewTopLevelDumper(c.getClassType(), summaryDumper, typeUsageInformation, illegalIdentifierDump);
+            d = dcCommonState.getObfuscationMapping().wrap(d);
 
             String methname = options.getOption(OptionsImpl.METHODNAME);
             if (methname == null) {
@@ -84,9 +100,12 @@ class Driver {
         }
     }
 
-    static void doJar(DCCommonState dcCommonState, String path, DumperFactory dumperFactory) {
+    static void doJar(DCCommonState dcCommonState, String path, AnalysisType analysisType, DumperFactory dumperFactory) {
         Options options = dcCommonState.getOptions();
         IllegalIdentifierDump illegalIdentifierDump = IllegalIdentifierDump.Factory.get(options);
+        ObfuscationMapping mapping = MappingFactory.get(options, dcCommonState);
+        dcCommonState = new DCCommonState(dcCommonState, mapping);
+
         SummaryDumper summaryDumper = null;
         try {
             ProgressDumper progressDumper = dumperFactory.getProgressDumper();
@@ -94,7 +113,7 @@ class Driver {
             summaryDumper.notify("Summary for " + path);
             summaryDumper.notify(MiscConstants.CFR_HEADER_BRA + " " + MiscConstants.CFR_VERSION);
             progressDumper.analysingPath(path);
-            Map<Integer, List<JavaTypeInstance>> clstypes = dcCommonState.explicitlyLoadJar(path);
+            Map<Integer, List<JavaTypeInstance>> clstypes = dcCommonState.explicitlyLoadJar(path, analysisType);
             Set<JavaTypeInstance> versionCollisions = getVersionCollisions(clstypes);
             dcCommonState.setCollisions(versionCollisions);
             List<Integer> versionsSeen = ListFactory.newList();
@@ -216,6 +235,7 @@ class Driver {
                     continue;
                 }
                 if (!silent) {
+                    type = dcCommonState.getObfuscationMapping().get(type);
                     progressDumper.analysingType(type);
                 }
                 if (options.getOption(OptionsImpl.DECOMPILE_INNER_CLASSES)) {
@@ -224,20 +244,24 @@ class Driver {
                 // THEN analyse.
                 c.analyseTop(dcCommonState);
 
-                TypeUsageCollector collectingDumper = new TypeUsageCollectorImpl(options, c);
-                c.collectTypeUsages(collectingDumper);
-                d = dumperFactory.getNewTopLevelDumper(c.getClassType(), summaryDumper, collectingDumper.getTypeUsageInformation(), illegalIdentifierDump);
+                TypeUsageCollectingDumper collectingDumper = new TypeUsageCollectingDumper(options, c);
+                c.dump(collectingDumper);
+
+                JavaTypeInstance classType = c.getClassType();
+                classType = dcCommonState.getObfuscationMapping().get(classType);
+                d = dumperFactory.getNewTopLevelDumper(classType, summaryDumper, collectingDumper.getRealTypeUsageInformation(), illegalIdentifierDump);
+                d = dcCommonState.getObfuscationMapping().wrap(d);
 
                 c.dump(d);
-                d.print("\n");
-                d.print("\n");
+                d.newln();
+                d.newln();
                 if (lomem) {
                     c.releaseCode();
                 }
             } catch (Dumper.CannotCreate e) {
                 throw e;
             } catch (RuntimeException e) {
-                d.print(e.toString()).print("\n").print("\n").print("\n");
+                d.print(e.toString()).newln().newln().newln();
             } finally {
                 if (d != null) d.close();
             }

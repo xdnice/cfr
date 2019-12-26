@@ -6,7 +6,10 @@ import org.benf.cfr.reader.bytecode.analysis.opgraph.op4rewriters.matchutil.Matc
 import org.benf.cfr.reader.bytecode.analysis.parse.Expression;
 import org.benf.cfr.reader.bytecode.analysis.parse.LValue;
 import org.benf.cfr.reader.bytecode.analysis.parse.StatementContainer;
-import org.benf.cfr.reader.bytecode.analysis.parse.expression.*;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.AbstractAssignmentExpression;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.AbstractMutatingAssignmentExpression;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.AssignmentExpression;
+import org.benf.cfr.reader.bytecode.analysis.parse.expression.ConditionalExpression;
 import org.benf.cfr.reader.bytecode.analysis.parse.lvalue.LocalVariable;
 import org.benf.cfr.reader.bytecode.analysis.parse.rewriters.ExpressionRewriter;
 import org.benf.cfr.reader.bytecode.analysis.parse.statement.AssignmentSimple;
@@ -16,9 +19,9 @@ import org.benf.cfr.reader.bytecode.analysis.structured.StructuredStatement;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
 import org.benf.cfr.reader.bytecode.analysis.types.RawJavaType;
 import org.benf.cfr.reader.state.TypeUsageCollector;
+import org.benf.cfr.reader.util.StringUtils;
 import org.benf.cfr.reader.util.collections.ListFactory;
 import org.benf.cfr.reader.util.functors.Predicate;
-import org.benf.cfr.reader.util.StringUtils;
 import org.benf.cfr.reader.util.output.Dumper;
 
 import java.util.List;
@@ -48,25 +51,26 @@ public class StructuredFor extends AbstractStructuredBlockStatement {
 
     @Override
     public Dumper dump(Dumper dumper) {
-        if (block.hasForeignReferences()) dumper.print(block.getName() + " : ");
-        dumper.print("for (");
+        if (block.hasForeignReferences()) dumper.label(block.getName(), true);
+        dumper.keyword("for ").separator("(");
         if (initial != null) {
-            // It's a big grotty to have creator here, but no worse that pushing it into Assignmentsimple
             if (isCreator) {
-                LValue.Creation.dump(dumper, initial.getCreatedLValue()).print(" ");
+                // The reason this looks wrong is because initial should be a structured definition here....
+                LValue.Creation.dump(dumper, initial.getCreatedLValue()).operator(" = ").dump(initial.getRValue()).separator(";");
+            } else {
+                dumper.dump(initial);
             }
-            dumper.dump(initial);
             dumper.removePendingCarriageReturn();
         } else {
-            dumper.print(";");
+            dumper.separator(";");
         }
-        dumper.print(" ").dump(condition).print("; ");
+        dumper.print(" ").dump(condition).separator("; ");
         boolean first = true;
         for (Expression assignment : assignments) {
             first = StringUtils.comma(first, dumper);
             dumper.dump(assignment);
         }
-        dumper.print(") ");
+        dumper.separator(") ");
         getBody().dump(dumper);
         return dumper;
     }
@@ -179,6 +183,10 @@ public class StructuredFor extends AbstractStructuredBlockStatement {
     @Override
     public void rewriteExpressions(ExpressionRewriter expressionRewriter) {
         condition = expressionRewriter.rewriteExpression(condition, null, this.getContainer(), null);
+        initial.rewriteExpressions(expressionRewriter, null);
+        for (int x = 0; x < assignments.size(); ++x) {
+            assignments.set(x, (AbstractAssignmentExpression)expressionRewriter.rewriteExpression(assignments.get(x), null, this.getContainer(), null));
+        }
     }
 
     public BlockIdentifier getBlock() {

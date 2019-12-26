@@ -1,6 +1,7 @@
 package org.benf.cfr.reader.bytecode.analysis.types;
 
 import org.benf.cfr.reader.bytecode.analysis.types.annotated.JavaAnnotatedTypeInstance;
+import org.benf.cfr.reader.state.ObfuscationTypeMap;
 import org.benf.cfr.reader.state.TypeUsageCollector;
 import org.benf.cfr.reader.state.TypeUsageInformation;
 import org.benf.cfr.reader.util.output.Dumper;
@@ -87,6 +88,7 @@ public interface JavaTypeInstance {
      */
     JavaTypeInstance directImplOf(JavaTypeInstance other);
 
+    JavaTypeInstance deObfuscate(ObfuscationTypeMap obfuscationTypeMap);
     /*
      * Is this a raw type?
      */

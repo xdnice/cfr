@@ -5,6 +5,7 @@ import org.benf.cfr.reader.bytecode.analysis.types.annotated.JavaAnnotatedTypeIn
 import org.benf.cfr.reader.entities.ClassFile;
 import org.benf.cfr.reader.entities.annotations.AnnotationTableTypeEntry;
 import org.benf.cfr.reader.state.DCCommonState;
+import org.benf.cfr.reader.state.ObfuscationTypeMap;
 import org.benf.cfr.reader.state.TypeUsageCollector;
 import org.benf.cfr.reader.state.TypeUsageInformation;
 import org.benf.cfr.reader.util.*;
@@ -51,6 +52,13 @@ public class JavaRefTypeInstance implements JavaTypeInstance {
         }
         this.className = className;
         this.shortName = getShortName(className, innerClassInfo);
+    }
+
+    /*
+     * This should only be necessary when dealing with classes where we can't infer this at creation time.
+     */
+    public void setUnexpectedInnerClassOf(JavaRefTypeInstance parent) {
+        this.innerClassInfo = new RefTypeInnerClassInfo(parent);
     }
 
     private JavaRefTypeInstance(final String className, final JavaRefTypeInstance knownOuter, DCCommonState dcCommonState) {
@@ -235,7 +243,7 @@ public class JavaRefTypeInstance implements JavaTypeInstance {
     }
 
     public String getPackageName() {
-        return ClassNameUtils.getPackageAndClassNames(getRawName()).getFirst();
+        return ClassNameUtils.getPackageAndClassNames(this).getFirst();
     }
 
     @Override
@@ -323,6 +331,11 @@ public class JavaRefTypeInstance implements JavaTypeInstance {
     @Override
     public RawJavaType getRawTypeOfSimpleType() {
         return RawJavaType.REF;
+    }
+
+    @Override
+    public JavaTypeInstance deObfuscate(ObfuscationTypeMap obfuscationTypeMap) {
+        return obfuscationTypeMap.get(this);
     }
 
     @Override

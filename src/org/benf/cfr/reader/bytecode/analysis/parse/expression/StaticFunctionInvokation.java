@@ -96,23 +96,23 @@ public class StaticFunctionInvokation extends AbstractFunctionInvokation impleme
 
     @Override
     public Dumper dumpInner(Dumper d) {
-        d.dump(clazz).print(".");
+        d.dump(clazz).separator(".");
         if (explicitGenerics != null && !explicitGenerics.isEmpty()) {
-            d.print("<");
+            d.operator("<");
             boolean first = true;
             for (JavaTypeInstance typeInstance : explicitGenerics) {
                 first = StringUtils.comma(first, d);
                 d.dump(typeInstance);
             }
-            d.print(">");
+            d.operator(">");
         }
-        d.identifier(getFixedName()).print("(");
+        d.methodName(getFixedName(), getMethodPrototype(), false, false).separator("(");
         boolean first = true;
         for (Expression arg : args) {
             first = StringUtils.comma(first, d);
             d.dump(arg);
         }
-        d.print(")");
+        d.separator(")");
         return d;
     }
 

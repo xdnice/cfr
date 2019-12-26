@@ -12,11 +12,13 @@ import org.benf.cfr.reader.bytecode.analysis.parse.utils.LValueRewriter;
 import org.benf.cfr.reader.bytecode.analysis.parse.utils.LValueUsageCollector;
 import org.benf.cfr.reader.bytecode.analysis.parse.utils.SSAIdentifiers;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
+import org.benf.cfr.reader.bytecode.analysis.types.MethodPrototype;
 import org.benf.cfr.reader.bytecode.analysis.types.discovery.InferredJavaType;
 import org.benf.cfr.reader.state.TypeUsageCollector;
 import org.benf.cfr.reader.util.MiscConstants;
 import org.benf.cfr.reader.util.StringUtils;
 import org.benf.cfr.reader.util.Troolean;
+import org.benf.cfr.reader.util.collections.ListFactory;
 import org.benf.cfr.reader.util.output.Dumper;
 
 import java.util.List;
@@ -27,50 +29,53 @@ import java.util.List;
 public class LambdaExpressionFallback extends AbstractExpression implements LambdaExpressionCommon {
 
     private JavaTypeInstance callClassType;
-    private String lambdaFnName;
+    private MethodPrototype lambdaFn;
     private List<JavaTypeInstance> targetFnArgTypes;
     private List<Expression> curriedArgs;
     private boolean instance;
-    private final boolean colon;
+    private final boolean methodRef;
 
+    private String lambdaFnName() {
+        String lambdaFnName = lambdaFn.getName();
+        return lambdaFnName.equals(MiscConstants.INIT_METHOD) ? MiscConstants.NEW : lambdaFnName;
+    }
 
-    public LambdaExpressionFallback(JavaTypeInstance callClassType, InferredJavaType castJavaType, String lambdaFnName, List<JavaTypeInstance> targetFnArgTypes, List<Expression> curriedArgs, boolean instance) {
+    public LambdaExpressionFallback(JavaTypeInstance callClassType, InferredJavaType castJavaType, MethodPrototype lambdaFn, List<JavaTypeInstance> targetFnArgTypes, List<Expression> curriedArgs, boolean instance) {
         super(castJavaType);
         this.callClassType = callClassType;
-        this.lambdaFnName = lambdaFnName.equals(MiscConstants.INIT_METHOD) ? "new" : lambdaFnName;
+        this.lambdaFn = lambdaFn;
         this.targetFnArgTypes = targetFnArgTypes;
         this.curriedArgs = curriedArgs;
         this.instance = instance;
-        boolean isColon = false;
+        boolean isMethodRef = false;
         switch (curriedArgs.size()) {
             case 0:
-                isColon = targetFnArgTypes.size() <= 1 && !instance;
+                isMethodRef = true;
                 if (instance) {
                     /* Don't really understand what's going on here.... */
-                    isColon = true;
                     this.instance = false;
                 }
                 break;
             case 1:
-                isColon = targetFnArgTypes.size() <= 1 && instance;
+                isMethodRef = targetFnArgTypes.size() <= 1 && instance;
                 break;
         }
-        this.colon = isColon;
+        this.methodRef = isMethodRef;
     }
 
-    private LambdaExpressionFallback(InferredJavaType inferredJavaType, boolean colon, boolean instance, List<Expression> curriedArgs, List<JavaTypeInstance> targetFnArgTypes, String lambdaFnName, JavaTypeInstance callClassType) {
+    private LambdaExpressionFallback(InferredJavaType inferredJavaType, boolean methodRef, boolean instance, List<Expression> curriedArgs, List<JavaTypeInstance> targetFnArgTypes, MethodPrototype lambdaFn, JavaTypeInstance callClassType) {
         super(inferredJavaType);
-        this.colon = colon;
+        this.methodRef = methodRef;
         this.instance = instance;
         this.curriedArgs = curriedArgs;
         this.targetFnArgTypes = targetFnArgTypes;
-        this.lambdaFnName = lambdaFnName;
+        this.lambdaFn = lambdaFn;
         this.callClassType = callClassType;
     }
 
     @Override
     public Expression deepClone(CloneHelper cloneHelper) {
-        return new LambdaExpressionFallback(getInferredJavaType(), colon, instance, cloneHelper.replaceOrClone(curriedArgs), targetFnArgTypes, lambdaFnName, callClassType);
+        return new LambdaExpressionFallback(getInferredJavaType(), methodRef, instance, cloneHelper.replaceOrClone(curriedArgs), targetFnArgTypes, lambdaFn, callClassType);
     }
 
     @Override
@@ -106,28 +111,38 @@ public class LambdaExpressionFallback extends AbstractExpression implements Lamb
 
     @Override
     public Dumper dumpInner(Dumper d) {
-        if (colon) {
+        String name = lambdaFnName();
+        //noinspection StringEquality
+        boolean special = name == MiscConstants.NEW;
+        if (methodRef) {
             if (instance) {
-                curriedArgs.get(0).dumpWithOuterPrecedence(d, getPrecedence(), Troolean.TRUE).print("::").print(lambdaFnName);
+                curriedArgs.get(0).dumpWithOuterPrecedence(d, getPrecedence(), Troolean.TRUE).print("::").methodName(name, lambdaFn, special, false);
             } else {
-                d.dump(callClassType).print("::").print(lambdaFnName);
+                d.dump(callClassType).print("::").methodName(name, lambdaFn, special, false);
             }
         } else {
             int n = targetFnArgTypes.size();
             boolean multi = n != 1;
-            if (multi) d.print("(");
+            if (multi) {
+                d.separator("(");
+            }
+            List<String> args = ListFactory.newList(n);
             for (int x = 0; x < n; ++x) {
-                if (x > 0) d.print(", ");
-                d.print("arg_" + x);
+                if (x > 0) d.separator(", ");
+                String arg = "arg_" + x;
+                args.add(arg);
+                d.identifier(arg, arg, true);
             }
-            if (multi) d.print(")");
+            if (multi) {
+                d.separator(")");
+            }
+            d.operator(" -> ");
             if (instance) {
-                d = d.print(" -> ");
-                curriedArgs.get(0).dumpWithOuterPrecedence(d, getPrecedence(), Troolean.TRUE).print('.').print(lambdaFnName);
+                curriedArgs.get(0).dumpWithOuterPrecedence(d, getPrecedence(), Troolean.TRUE).separator(".").methodName(name, lambdaFn, special, false);
             } else {
-                d.print(" -> ").dump(callClassType).print('.').print(lambdaFnName);
+                d.dump(callClassType).print('.').methodName(name, lambdaFn, special, false);
             }
-            d.print("(");
+            d.separator("(");
             boolean first = true;
             for (int x = instance ? 1 : 0, cnt = curriedArgs.size(); x < cnt; ++x) {
                 Expression c = curriedArgs.get(x);
@@ -136,9 +151,10 @@ public class LambdaExpressionFallback extends AbstractExpression implements Lamb
             }
             for (int x = 0; x < n; ++x) {
                 first = StringUtils.comma(first, d);
-                d.print("arg_" + x);
+                String arg = args.get(x);
+                d.identifier(arg, arg, false);
             }
-            d.print(")");
+            d.separator(")");
         }
         return d;
     }
@@ -154,12 +170,12 @@ public class LambdaExpressionFallback extends AbstractExpression implements Lamb
 
         LambdaExpressionFallback that = (LambdaExpressionFallback) o;
 
-        if (colon != that.colon) return false;
+        if (methodRef != that.methodRef) return false;
         if (instance != that.instance) return false;
         if (callClassType != null ? !callClassType.equals(that.callClassType) : that.callClassType != null)
             return false;
         if (curriedArgs != null ? !curriedArgs.equals(that.curriedArgs) : that.curriedArgs != null) return false;
-        if (lambdaFnName != null ? !lambdaFnName.equals(that.lambdaFnName) : that.lambdaFnName != null) return false;
+        if (lambdaFn != null ? !lambdaFn.equals(that.lambdaFn) : that.lambdaFn != null) return false;
         if (targetFnArgTypes != null ? !targetFnArgTypes.equals(that.targetFnArgTypes) : that.targetFnArgTypes != null)
             return false;
 
@@ -173,8 +189,8 @@ public class LambdaExpressionFallback extends AbstractExpression implements Lamb
         if (getClass() != o.getClass()) return false;
         LambdaExpressionFallback other = (LambdaExpressionFallback) o;
         if (instance != other.instance) return false;
-        if (colon != other.colon) return false;
-        if (!constraint.equivalent(lambdaFnName, other.lambdaFnName)) return false;
+        if (methodRef != other.methodRef) return false;
+        if (!constraint.equivalent(lambdaFn, other.lambdaFn)) return false;
         if (!constraint.equivalent(curriedArgs, other.curriedArgs)) return false;
         return true;
     }

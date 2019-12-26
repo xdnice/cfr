@@ -1,5 +1,6 @@
 package org.benf.cfr.reader.util.getopt;
 
+import org.benf.cfr.reader.state.OsInfo;
 import org.benf.cfr.reader.util.AnalysisType;
 import org.benf.cfr.reader.util.ClassFileVersion;
 import org.benf.cfr.reader.util.StringUtils;
@@ -84,10 +85,16 @@ public class OptionsImpl implements Options {
             return null;
         }
     };
-    private static final OptionDecoder<Boolean> defaultTrueBooleanDecoder = new OptionDecoder<Boolean>() {
+
+    private static class DefaultingBooleanDecoder implements OptionDecoder<Boolean> {
+        private final boolean val;
+        DefaultingBooleanDecoder(boolean val) {
+            this.val = val;
+        }
+
         @Override
         public Boolean invoke(String arg, Void ignore, Options ignore2) {
-            return arg == null || Boolean.parseBoolean(arg);
+            return arg == null ? val : Boolean.parseBoolean(arg);
         }
 
         @Override
@@ -97,25 +104,14 @@ public class OptionsImpl implements Options {
 
         @Override
         public String getDefaultValue() {
-            return "true";
+            return Boolean.toString(val);
         }
-    };
-    private static final OptionDecoder<Boolean> defaultFalseBooleanDecoder = new OptionDecoder<Boolean>() {
-        @Override
-        public Boolean invoke(String arg, Void ignore, Options ignore2) {
-            return Boolean.parseBoolean(arg);
-        }
+    }
 
-        @Override
-        public String getRangeDescription() {
-            return "boolean";
-        }
+    private static final OptionDecoder<Boolean> defaultTrueBooleanDecoder = new DefaultingBooleanDecoder(true);
 
-        @Override
-        public String getDefaultValue() {
-            return "false";
-        }
-    };
+    private static final OptionDecoder<Boolean> defaultFalseBooleanDecoder = new DefaultingBooleanDecoder(false);
+
     private static class DefaultChainBooleanDecoder implements OptionDecoder<Boolean> {
 
         private final PermittedOptionProvider.Argument<Boolean> chain;
@@ -462,7 +458,7 @@ public class OptionsImpl implements Options {
             "elidescala", defaultFalseBooleanDecoder,
             "Elide things which aren't helpful in scala output (serialVersionUID, @ScalaSignature).");
     public static final PermittedOptionProvider.Argument<Boolean> CASE_INSENSITIVE_FS_RENAME = new PermittedOptionProvider.Argument<Boolean>(
-            "caseinsensitivefs", defaultFalseBooleanDecoder,
+            "caseinsensitivefs", new DefaultingBooleanDecoder(OsInfo.OS().isCaseInsensitive()),
             "Cope with case insensitive file systems by renaming colliding classes.");
     public static final PermittedOptionProvider.Argument<Boolean> LOMEM = new PermittedOptionProvider.Argument<Boolean>(
             "lomem", defaultFalseBooleanDecoder,
@@ -470,6 +466,9 @@ public class OptionsImpl implements Options {
     public static final PermittedOptionProvider.Argument<String> IMPORT_FILTER = new PermittedOptionProvider.Argument<String>(
             "importfilter", defaultNullStringDecoder,
             "Substring regex - import classes only when fqn matches this pattern. (VNegate with !, eg !lang)");
+    public static final PermittedOptionProvider.Argument<String> OBFUSCATION_PATH = new PermittedOptionProvider.Argument<String>(
+            "obfuscationpath", defaultNullStringDecoder,
+            "Path to obfuscation symbol remapping file");
 
 
     public OptionsImpl(Map<String, String> opts) {
@@ -519,7 +518,9 @@ public class OptionsImpl implements Options {
                     FORCE_RETURNING_IFS, ANALYSE_AS, FOR_LOOP_CAPTURE, RENAME_DUP_MEMBERS, RENAME_ENUM_MEMBERS,
                     RENAME_SMALL_MEMBERS, RENAME_ILLEGAL_IDENTS, RENAME_MEMBERS, USE_NAME_TABLE,
                     AGGRESSIVE_SIZE_REDUCTION_THRESHOLD, EXTRA_CLASS_PATH, PULL_CODE_CASE, HELP, ELIDE_SCALA,
-                    CASE_INSENSITIVE_FS_RENAME, RELINK_CONSTANT_STRINGS, REWRITE_TRY_RESOURCES, IGNORE_EXCEPTIONS, IGNORE_EXCEPTIONS_ALWAYS, METHODNAME, SKIP_BATCH_INNER_CLASSES);
+                    CASE_INSENSITIVE_FS_RENAME, RELINK_CONSTANT_STRINGS, REWRITE_TRY_RESOURCES, IGNORE_EXCEPTIONS,
+                    IGNORE_EXCEPTIONS_ALWAYS, METHODNAME, SKIP_BATCH_INNER_CLASSES,
+                    OBFUSCATION_PATH);
         }
 
         @Override

@@ -4,14 +4,43 @@ import org.benf.cfr.reader.bytecode.CodeAnalyserWholeClass;
 import org.benf.cfr.reader.bytecode.analysis.opgraph.Op04StructuredStatement;
 import org.benf.cfr.reader.bytecode.analysis.parse.expression.ConstructorInvokationAnonymousInner;
 import org.benf.cfr.reader.bytecode.analysis.parse.expression.ConstructorInvokationSimple;
+import org.benf.cfr.reader.bytecode.analysis.parse.rewriters.LiteralRewriter;
 import org.benf.cfr.reader.bytecode.analysis.parse.utils.Pair;
 import org.benf.cfr.reader.bytecode.analysis.parse.utils.Triplet;
-import org.benf.cfr.reader.bytecode.analysis.types.*;
+import org.benf.cfr.reader.bytecode.analysis.types.BindingSuperContainer;
+import org.benf.cfr.reader.bytecode.analysis.types.BoundSuperCollector;
+import org.benf.cfr.reader.bytecode.analysis.types.ClassSignature;
+import org.benf.cfr.reader.bytecode.analysis.types.FormalTypeParameter;
+import org.benf.cfr.reader.bytecode.analysis.types.GenericTypeBinder;
+import org.benf.cfr.reader.bytecode.analysis.types.InnerClassInfo;
+import org.benf.cfr.reader.bytecode.analysis.types.JavaGenericRefTypeInstance;
+import org.benf.cfr.reader.bytecode.analysis.types.JavaRefTypeInstance;
+import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
+import org.benf.cfr.reader.bytecode.analysis.types.MethodPrototype;
+import org.benf.cfr.reader.bytecode.analysis.types.RawJavaType;
+import org.benf.cfr.reader.bytecode.analysis.types.TypeConstants;
 import org.benf.cfr.reader.bytecode.analysis.variables.VariableNamer;
 import org.benf.cfr.reader.bytecode.analysis.variables.VariableNamerDefault;
-import org.benf.cfr.reader.entities.attributes.*;
-import org.benf.cfr.reader.entities.classfilehelpers.*;
-import org.benf.cfr.reader.entities.constantpool.*;
+import org.benf.cfr.reader.entities.attributes.Attribute;
+import org.benf.cfr.reader.entities.attributes.AttributeBootstrapMethods;
+import org.benf.cfr.reader.entities.attributes.AttributeEnclosingMethod;
+import org.benf.cfr.reader.entities.attributes.AttributeInnerClasses;
+import org.benf.cfr.reader.entities.attributes.AttributeMap;
+import org.benf.cfr.reader.entities.attributes.AttributeModule;
+import org.benf.cfr.reader.entities.attributes.AttributeRuntimeInvisibleAnnotations;
+import org.benf.cfr.reader.entities.attributes.AttributeRuntimeVisibleAnnotations;
+import org.benf.cfr.reader.entities.attributes.AttributeSignature;
+import org.benf.cfr.reader.entities.classfilehelpers.ClassFileDumper;
+import org.benf.cfr.reader.entities.classfilehelpers.ClassFileDumperAnnotation;
+import org.benf.cfr.reader.entities.classfilehelpers.ClassFileDumperInterface;
+import org.benf.cfr.reader.entities.classfilehelpers.ClassFileDumperModule;
+import org.benf.cfr.reader.entities.classfilehelpers.ClassFileDumperNormal;
+import org.benf.cfr.reader.entities.classfilehelpers.OverloadMethodSet;
+import org.benf.cfr.reader.entities.constantpool.ConstantPool;
+import org.benf.cfr.reader.entities.constantpool.ConstantPoolEntryClass;
+import org.benf.cfr.reader.entities.constantpool.ConstantPoolEntryNameAndType;
+import org.benf.cfr.reader.entities.constantpool.ConstantPoolEntryUTF8;
+import org.benf.cfr.reader.entities.constantpool.ConstantPoolUtils;
 import org.benf.cfr.reader.entities.innerclass.InnerClassAttributeInfo;
 import org.benf.cfr.reader.entityfactories.AttributeFactory;
 import org.benf.cfr.reader.entityfactories.ContiguousEntityFactory;
@@ -20,7 +49,13 @@ import org.benf.cfr.reader.state.DCCommonState;
 import org.benf.cfr.reader.state.InnerClassTypeUsageInformation;
 import org.benf.cfr.reader.state.TypeUsageCollector;
 import org.benf.cfr.reader.state.TypeUsageInformation;
-import org.benf.cfr.reader.util.*;
+import org.benf.cfr.reader.util.CannotLoadClassException;
+import org.benf.cfr.reader.util.ClassFileVersion;
+import org.benf.cfr.reader.util.ConfusedCFRException;
+import org.benf.cfr.reader.util.DecompilerComment;
+import org.benf.cfr.reader.util.DecompilerComments;
+import org.benf.cfr.reader.util.MiscConstants;
+import org.benf.cfr.reader.util.TypeUsageCollectable;
 import org.benf.cfr.reader.util.bytestream.ByteData;
 import org.benf.cfr.reader.util.collections.Functional;
 import org.benf.cfr.reader.util.collections.ListFactory;
@@ -34,9 +69,13 @@ import org.benf.cfr.reader.util.getopt.OptionsImpl;
 import org.benf.cfr.reader.util.output.Dumpable;
 import org.benf.cfr.reader.util.output.Dumper;
 import org.benf.cfr.reader.util.output.IllegalIdentifierReplacement;
-import org.benf.cfr.reader.util.output.TypeOverridingDumper;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public class ClassFile implements Dumpable, TypeUsageCollectable {
     // Constants
@@ -58,7 +97,7 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
     private final boolean isInnerClass;
     private final Map<JavaTypeInstance, Pair<InnerClassAttributeInfo, ClassFile>> innerClassesByTypeInfo; // populated if analysed.
 
-    private final Map<String, Attribute> attributes;
+    private final AttributeMap attributes;
     private final ConstantPoolEntryClass thisClass;
     @SuppressWarnings("FieldCanBeLocal")
     private final ConstantPoolEntryClass rawSuperClass;
@@ -137,8 +176,9 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
                     }
                 });
         this.fields = ListFactory.newList();
+        LiteralRewriter rewriter = new LiteralRewriter(this.getClassType());
         for (Field tmpField : tmpFields) {
-            fields.add(new ClassFileField(tmpField));
+            fields.add(new ClassFileField(tmpField, rewriter));
         }
 
         final long OFFSET_OF_METHODS_COUNT = OFFSET_OF_FIELDS + fieldsLength;
@@ -177,9 +217,9 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
                 AttributeFactory.getBuilder(constantPool, classFileVersion)
         );
 
-        this.attributes = ContiguousEntityFactory.addToMap(new HashMap<String, Attribute>(), tmpAttributes);
+        this.attributes = new AttributeMap(tmpAttributes);
         AccessFlag.applyAttributes(attributes, accessFlags);
-        this.isInnerClass = testIsInnerClass();
+        this.isInnerClass = testIsInnerClass(dcCommonState);
 
         int superClassIndex = data.getU2At(OFFSET_OF_SUPER_CLASS);
         if (superClassIndex == 0) {
@@ -196,6 +236,7 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
 
         boolean isInterface = accessFlags.contains(AccessFlag.ACC_INTERFACE);
         boolean isAnnotation = accessFlags.contains(AccessFlag.ACC_ANNOTATION);
+        boolean isModule = accessFlags.contains(AccessFlag.ACC_MODULE);
         /*
          * Choose a default dump helper.  This may be overwritten.
          */
@@ -206,7 +247,22 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
                 dumpHelper = new ClassFileDumperInterface(dcCommonState);
             }
         } else {
-            dumpHelper = new ClassFileDumperNormal(dcCommonState);
+            if (isModule) {
+                if (!methods.isEmpty()) {
+                    // This shouldn't be possible, but I suspect someone might try it!
+                    addComment("Class file marked as module, but has methods! Treated as a class file");
+                    isModule = false;
+                }
+                if (null == attributes.getByName(AttributeModule.ATTRIBUTE_NAME)) {
+                    addComment("Class file marked as module, but no module attribute!");
+                    isModule = false;
+                }
+            }
+            if (isModule) {
+                dumpHelper = new ClassFileDumperModule(dcCommonState);
+            } else {
+                dumpHelper = new ClassFileDumperNormal(dcCommonState);
+            }
         }
 
         /*
@@ -214,7 +270,7 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
          */
         if (classFileVersion.before(ClassFileVersion.JAVA_6)) {
             boolean hasSignature = false;
-            if (null != getAttributeByName(AttributeSignature.ATTRIBUTE_NAME)) hasSignature = true;
+            if (null != attributes.getByName(AttributeSignature.ATTRIBUTE_NAME)) hasSignature = true;
             if (!hasSignature) {
                 for (Method method : methods) {
                     if (null != method.getSignatureAttribute()) {
@@ -238,10 +294,10 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
          * If the type instance for this class has decided that it's an inner class, but the class meta data does not
          * believe so, correct the type instance!
          */
-        AttributeInnerClasses attributeInnerClasses = getAttributeByName(AttributeInnerClasses.ATTRIBUTE_NAME);
+        AttributeInnerClasses attributeInnerClasses = attributes.getByName(AttributeInnerClasses.ATTRIBUTE_NAME);
         JavaRefTypeInstance typeInstance = (JavaRefTypeInstance) thisClass.getTypeInstance();
         if (typeInstance.getInnerClassHereInfo().isInnerClass()) {
-            checkInnerClassAssumption(attributeInnerClasses, typeInstance);
+            checkInnerClassAssumption(attributeInnerClasses, typeInstance, dcCommonState);
         }
 
         /*
@@ -268,6 +324,10 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
 
         if (dcCommonState.getVersionCollisions().contains(getClassType())) {
             addComment(DecompilerComment.MULTI_VERSION);
+        }
+        DecompilerComment renamedClass = dcCommonState.renamedTypeComment(getClassType().getRawName());
+        if (renamedClass != null) {
+            addComment(renamedClass);
         }
     }
 
@@ -303,7 +363,7 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         } catch (Exception ignore) {
         }
         // If it's there.  Don't have a flag to hide attributes (should do, really).
-        AttributeRuntimeVisibleAnnotations annotations = getAttributeByName(AttributeRuntimeVisibleAnnotations.ATTRIBUTE_NAME);
+        AttributeRuntimeVisibleAnnotations annotations = attributes.getByName(AttributeRuntimeVisibleAnnotations.ATTRIBUTE_NAME);
         if (annotations != null) {
             annotations.hide(TypeConstants.SCALA_SIGNATURE);
         }
@@ -312,13 +372,17 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
     /*
      * We might have to correct this, if an assumption has been made based on type name.
      */
-    private static void checkInnerClassAssumption(AttributeInnerClasses attributeInnerClasses, JavaRefTypeInstance typeInstance) {
+    private void checkInnerClassAssumption(AttributeInnerClasses attributeInnerClasses, JavaRefTypeInstance typeInstance, DCCommonState state) {
         if (attributeInnerClasses != null) {
             for (InnerClassAttributeInfo innerClassAttributeInfo : attributeInnerClasses.getInnerClassAttributeInfoList()) {
                 if (innerClassAttributeInfo.getInnerClassInfo().equals(typeInstance)) {
                     return;
                 }
             }
+        }
+        // If we're handling obfuscation where we've been given inner class info, then that might be more trustworthy.
+        if (state.getObfuscationMapping().providesInnerClassInfo()) {
+            return;
         }
         /*
          * No - we are NOT an inner class, regardless of what the guessed information says.
@@ -377,8 +441,8 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
             innerClassFile.collectTypeUsages(collector);
         }
         collector.collectFrom(dumpHelper);
-        collector.collectFrom(getAttributeByName(AttributeRuntimeVisibleAnnotations.ATTRIBUTE_NAME));
-        collector.collectFrom(getAttributeByName(AttributeRuntimeInvisibleAnnotations.ATTRIBUTE_NAME));
+        collector.collectFrom(attributes.getByName(AttributeRuntimeVisibleAnnotations.ATTRIBUTE_NAME));
+        collector.collectFrom(attributes.getByName(AttributeRuntimeInvisibleAnnotations.ATTRIBUTE_NAME));
     }
 
     private void getAllClassTypes(List<JavaTypeInstance> tgt) {
@@ -499,11 +563,6 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
 
     public List<Method> getMethods() {
         return methods;
-    }
-
-    public void removePointlessMethod(Method method) {
-        methodsByName.remove(method.getName());
-        methods.remove(method);
     }
 
     private List<Method> getMethodsWithMatchingName(final MethodPrototype prototype) {
@@ -643,16 +702,8 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         return res;
     }
 
-    public <X extends Attribute> X getAttributeByName(String name) {
-        Attribute attribute = attributes.get(name);
-        if (attribute == null) return null;
-        @SuppressWarnings("unchecked")
-        X tmp = (X) attribute;
-        return tmp;
-    }
-
     public AttributeBootstrapMethods getBootstrapMethods() {
-        return getAttributeByName(AttributeBootstrapMethods.ATTRIBUTE_NAME);
+        return attributes.getByName(AttributeBootstrapMethods.ATTRIBUTE_NAME);
     }
 
     public ConstantPoolEntryClass getThisClassConstpoolEntry() {
@@ -678,7 +729,7 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
             return true;
         }
 
-        AttributeEnclosingMethod encloser = getAttributeByName(AttributeEnclosingMethod.ATTRIBUTE_NAME);
+        AttributeEnclosingMethod encloser = attributes.getByName(AttributeEnclosingMethod.ATTRIBUTE_NAME);
         if (encloser == null) return false;
         int classIndex = encloser.getClassIndex();
         if (classIndex == 0) return false;
@@ -704,8 +755,8 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         return false;
     }
 
-    private boolean testIsInnerClass() {
-        List<InnerClassAttributeInfo> innerClassAttributeInfoList = getInnerClassAttributeInfos();
+    private boolean testIsInnerClass(DCCommonState dcCommonState) {
+        List<InnerClassAttributeInfo> innerClassAttributeInfoList = getInnerClassAttributeInfos(dcCommonState);
         if (innerClassAttributeInfoList == null) return false;
         final JavaTypeInstance thisType = thisClass.getTypeInstance();
 
@@ -718,7 +769,7 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
 
     // just after construction
     public void loadInnerClasses(DCCommonState dcCommonState) {
-        List<InnerClassAttributeInfo> innerClassAttributeInfoList = getInnerClassAttributeInfos();
+        List<InnerClassAttributeInfo> innerClassAttributeInfoList = getInnerClassAttributeInfos(dcCommonState);
         if (innerClassAttributeInfoList == null) return;
 
         final JavaTypeInstance thisType = thisClass.getTypeInstance();
@@ -762,13 +813,14 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         }
     }
 
-    private List<InnerClassAttributeInfo> getInnerClassAttributeInfos() {
-        AttributeInnerClasses attributeInnerClasses = getAttributeByName(AttributeInnerClasses.ATTRIBUTE_NAME);
+    private List<InnerClassAttributeInfo> getInnerClassAttributeInfos(DCCommonState state) {
+        AttributeInnerClasses attributeInnerClasses = attributes.getByName(AttributeInnerClasses.ATTRIBUTE_NAME);
         List<InnerClassAttributeInfo> innerClassAttributeInfoList = attributeInnerClasses == null ? null : attributeInnerClasses.getInnerClassAttributeInfoList();
-        if (innerClassAttributeInfoList == null) {
-            return null;
+        if (innerClassAttributeInfoList != null) {
+            return innerClassAttributeInfoList;
         }
-        return innerClassAttributeInfoList;
+        // If we don't have any inner class attributes, we might be dealing with obfuscated code that has stripped them.
+        return state.getObfuscationMapping().getInnerClassInfo(getClassType());
     }
 
     private void analyseInnerClassesPass1(DCCommonState state) {
@@ -923,14 +975,13 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         for (Method method : methods) {
             method.releaseCode();
         }
-//        attributes.clear();
     }
 
     public JavaTypeInstance getClassType() {
         return thisClass.getTypeInstance();
     }
 
-    public JavaRefTypeInstance getRefClasstype() {
+    public JavaRefTypeInstance getRefClassType() {
         return (JavaRefTypeInstance)thisClass.getTypeInstance();
     }
 
@@ -950,18 +1001,15 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         if (accessFlags.contains(AccessFlag.ACC_PRIVATE)) {
             accessFlags.remove(AccessFlag.ACC_PROTECTED);
             accessFlags.remove(AccessFlag.ACC_PUBLIC);
-            return;
-        }
-        if (accessFlags.contains(AccessFlag.ACC_PROTECTED)) {
+        } else if (accessFlags.contains(AccessFlag.ACC_PROTECTED)) {
             accessFlags.remove(AccessFlag.ACC_PUBLIC);
-            return;
         }
     }
 
     private ClassSignature getSignature(ConstantPool cp,
                                         ConstantPoolEntryClass rawSuperClass,
                                         List<ConstantPoolEntryClass> rawInterfaces) {
-        AttributeSignature signatureAttribute = getAttributeByName(AttributeSignature.ATTRIBUTE_NAME);
+        AttributeSignature signatureAttribute = attributes.getByName(AttributeSignature.ATTRIBUTE_NAME);
 
         if (signatureAttribute != null) {
             try {
@@ -987,8 +1035,6 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
     public void dumpNamedInnerClasses(Dumper d) {
         if (innerClassesByTypeInfo == null || innerClassesByTypeInfo.isEmpty()) return;
 
-        d.newln();
-
         for (Pair<InnerClassAttributeInfo, ClassFile> innerClassEntry : innerClassesByTypeInfo.values()) {
             // catchy!
             InnerClassInfo innerClassInfo = innerClassEntry.getFirst().getInnerClassInfo().getInnerClassHereInfo();
@@ -1004,10 +1050,9 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
             }
             TypeUsageInformation typeUsageInformation = d.getTypeUsageInformation();
             TypeUsageInformation innerclassTypeUsageInformation = new InnerClassTypeUsageInformation(typeUsageInformation, (JavaRefTypeInstance) classFile.getClassType());
-            Dumper d2 = new TypeOverridingDumper(d, innerclassTypeUsageInformation);
-
-            classFile.dumpHelper.dump(classFile, ClassFileDumper.InnerClassDumpType.INNER_CLASS, d2);
             d.newln();
+            Dumper d2 = d.withTypeUsageInformation(innerclassTypeUsageInformation);
+            classFile.dumpHelper.dump(classFile, ClassFileDumper.InnerClassDumpType.INNER_CLASS, d2);
         }
     }
 
@@ -1184,5 +1229,9 @@ public class ClassFile implements Dumpable, TypeUsageCollectable {
         } else {
             return signature.getInterfaces().get(0);
         }
+    }
+
+    public AttributeMap getAttributes() {
+        return attributes;
     }
 }

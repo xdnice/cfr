@@ -1,28 +1,45 @@
 package org.benf.cfr.reader.util.output;
 
+import org.benf.cfr.reader.bytecode.analysis.types.JavaRefTypeInstance;
 import org.benf.cfr.reader.bytecode.analysis.types.JavaTypeInstance;
+import org.benf.cfr.reader.bytecode.analysis.types.MethodPrototype;
 import org.benf.cfr.reader.entities.Method;
+import org.benf.cfr.reader.mapping.ObfuscationMapping;
 import org.benf.cfr.reader.state.TypeUsageInformation;
 
-import java.util.List;
-
+/*
+ * NB: This interface is NOT an externally visible one, and is subject to change.
+ */
 public interface Dumper {
-
     /*
      * A dumper is initialised with knowledge of the types, so that two
      * dumpers can dump the same code with different import shortening.
      */
     TypeUsageInformation getTypeUsageInformation();
 
-    void printLabel(String s);
+    ObfuscationMapping getObfuscationMapping();
+
+    Dumper label(String s, boolean inline);
 
     void enqueuePendingCarriageReturn();
 
     Dumper removePendingCarriageReturn();
 
+    Dumper keyword(String s);
+
+    Dumper operator(String s);
+
+    Dumper separator(String s);
+
+    Dumper literal(String s, Object o);
+
     Dumper print(String s);
 
-    Dumper identifier(String s);
+    Dumper methodName(String s, MethodPrototype p, boolean special, boolean defines);
+
+    Dumper packageName(JavaRefTypeInstance t);
+
+    Dumper identifier(String s, Object ref, boolean defines);
 
     Dumper print(char c);
 
@@ -30,21 +47,23 @@ public interface Dumper {
 
     Dumper endCodeln();
 
-    int getIndent();
-
     void indent(int diff);
-
-    void dump(List<? extends Dumpable> d);
-
-    Dumper dump(JavaTypeInstance javaTypeInstance);
-
-    Dumper dump(Dumpable d);
 
     void close();
 
     void addSummaryError(Method method, String s);
 
     boolean canEmitClass(JavaTypeInstance type);
+
+    Dumper fieldName(String name, JavaTypeInstance owner, boolean hiddenDeclaration, boolean isStatic, boolean defines);
+
+    Dumper withTypeUsageInformation(TypeUsageInformation innerclassTypeUsageInformation);
+
+    Dumper comment(String s);
+
+    Dumper beginBlockComment(boolean inline);
+
+    Dumper endBlockComment();
 
     class CannotCreate extends RuntimeException {
         CannotCreate(String s) {
@@ -62,5 +81,11 @@ public interface Dumper {
     }
 
     int getOutputCount();
+
+//////////////
+
+    Dumper dump(JavaTypeInstance javaTypeInstance);
+
+    Dumper dump(Dumpable d);
 
 }

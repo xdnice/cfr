@@ -3,6 +3,7 @@ package org.benf.cfr.reader.bytecode.analysis.types;
 import org.benf.cfr.reader.bytecode.analysis.types.annotated.JavaAnnotatedTypeInstance;
 import org.benf.cfr.reader.entities.annotations.AnnotationTableTypeEntry;
 import org.benf.cfr.reader.entities.constantpool.ConstantPool;
+import org.benf.cfr.reader.state.ObfuscationTypeMap;
 import org.benf.cfr.reader.state.TypeUsageCollector;
 import org.benf.cfr.reader.state.TypeUsageInformation;
 import org.benf.cfr.reader.util.collections.ListFactory;
@@ -10,6 +11,7 @@ import org.benf.cfr.reader.util.MiscConstants;
 import org.benf.cfr.reader.util.output.Dumper;
 
 import java.util.List;
+import java.util.Map;
 
 public class JavaGenericPlaceholderTypeInstance implements JavaGenericBaseInstance {
     private final String className;
@@ -97,18 +99,21 @@ public class JavaGenericPlaceholderTypeInstance implements JavaGenericBaseInstan
     }
 
     @Override
-    public boolean hasForeignUnbound(ConstantPool cp, int depth, boolean noWildcard) {
+    public boolean hasForeignUnbound(ConstantPool cp, int depth, boolean noWildcard, Map<String, FormalTypeParameter> externals) {
         // can't do reference equality on cp, because some types might come from the second load.
         // This needs reworking.
         if (className.equals(MiscConstants.UNBOUND_GENERIC)) {
             return depth == 0 || noWildcard;
         }
-        return !cp.equals(this.cp);
+        if (!cp.equals(this.cp)) return true;
+
+        if (externals == null) return false;
+        return !externals.containsKey(className);
     }
 
     /*
-         * TODO : Strictly speaking we should only be adding the binding here if className is in formal parameters.
-         */
+     * TODO : Strictly speaking we should only be adding the binding here if className is in formal parameters.
+     */
     @Override
     public boolean tryFindBinding(JavaTypeInstance other, GenericTypeBinder target) {
         target.suggestBindingFor(className, other);
@@ -191,7 +196,7 @@ public class JavaGenericPlaceholderTypeInstance implements JavaGenericBaseInstan
 
     @Override
     public JavaTypeInstance getDeGenerifiedType() {
-        return TypeConstants.OBJECT;
+        return bound == null ? TypeConstants.OBJECT : bound.getDeGenerifiedType();
     }
 
     @Override
@@ -227,6 +232,11 @@ public class JavaGenericPlaceholderTypeInstance implements JavaGenericBaseInstan
     public String suggestVarName() {
         if (className.equals(MiscConstants.UNBOUND_GENERIC)) { return "obj"; }
         return className;
+    }
+
+    @Override
+    public JavaTypeInstance deObfuscate(ObfuscationTypeMap obfuscationTypeMap) {
+        return new JavaGenericPlaceholderTypeInstance(className, cp, obfuscationTypeMap.get(bound));
     }
 
     @Override
